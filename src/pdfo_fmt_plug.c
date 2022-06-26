@@ -1,5 +1,9 @@
 /* PDF owner password cracker patch for JtR. Hacked together based on pdf_fmt_plug.c by
  * Didier Stevens <didier.stevens at gmail.com>.
+ * The changes relative to pdf_fmt_plug.c are
+ * Copyright (c) 2022 Didier Stevens
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted.
  */
 
 #if FMT_EXTERNS_H
