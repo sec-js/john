@@ -20,6 +20,12 @@
  * modification, are permitted.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_ssh;
 #elif FMT_REGISTERS_H
@@ -316,9 +322,9 @@ static void common_crypt_code(char *password, unsigned char *out, int full_decry
 		memcpy(key1, key, 8);
 		memcpy(key2, key + 8, 8);
 		memcpy(key3, key + 16, 8);
-		DES_set_key((DES_cblock *) key1, &ks1);
-		DES_set_key((DES_cblock *) key2, &ks2);
-		DES_set_key((DES_cblock *) key3, &ks3);
+		DES_set_key_unchecked((DES_cblock *) key1, &ks1);
+		DES_set_key_unchecked((DES_cblock *) key2, &ks2);
+		DES_set_key_unchecked((DES_cblock *) key3, &ks3);
 		if (full_decrypt) {
 			DES_ede3_cbc_encrypt(cur_salt->ct, out, cur_salt->ctl, &ks1, &ks2, &ks3, &iv, DES_DECRYPT);
 		} else {
@@ -491,7 +497,7 @@ static int cmp_exact(char *source, int index)
 #undef set_key /* OpenSSL DES clash */
 static void set_key(char *key, int index)
 {
-	strnzcpyn(saved_key[index], key, sizeof(*saved_key));
+	strnzcpy(saved_key[index], key, sizeof(*saved_key));
 }
 
 static char *get_key(int index)
@@ -555,3 +561,4 @@ struct fmt_main fmt_ssh = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

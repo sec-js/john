@@ -17,8 +17,9 @@ distribution, only the vendor-supplied drivers support OpenCL.  Either
 install fglrx (for old AMD cards) or nvidia dkms package or go directly
 with the ones provided by nvidia and ATI.
 
-Notice: Beignet, Mesa, and POCL are not officially supported, but may
-be usable in some OpenCL formats.
+Notice: Beignet and Mesa are not officially supported, but may be usable
+with some OpenCL formats.  POCL on the other hand has now been seen passing
+all self-tests (tested on Ubuntu 20.04 with bleeding-jumbo as of 2021/04/22).
 
 You can also use OpenCL with CPU, mostly useful if you have several
 (or loads of) cores.  This sometimes outperforms the CPU-only formats
@@ -171,7 +172,7 @@ cards by adding the 'Option "Interactive"' line to /etc/X11/xorg.conf:
 
 At this time we are not aware of any way to check or change this for AMD cards.
 What we do know is that some old AMD drivers will crash after repeated runs of
-as short durations as 200 ms, necessating a reboot.  If this happens, just
+as short durations as 200 ms, necessitating a reboot.  If this happens, just
 upgrade your driver.
 
 

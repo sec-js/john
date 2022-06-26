@@ -42,8 +42,10 @@
  #endif
 #endif
 
+#if HAVE_LIBCRYPTO
 #include <openssl/opensslv.h>
 #include <openssl/crypto.h>
+#endif
 
 #if HAVE_LIBDL
 #include <dlfcn.h>
@@ -53,7 +55,7 @@
 #define HAVE_LIBDL 1
 #endif
 
-#if HAVE_LIBGMP
+#if HAVE_LIBGMP && !__MIC__
 #if HAVE_GMP_GMP_H
 #include <gmp/gmp.h>
 #else
@@ -84,7 +86,7 @@
 #include "mask_ext.h"
 #include "john.h"
 #include "version.h"
-#include "listconf.h" /* must be included after version.h */
+#include "listconf.h" /* must be included after version.h and misc.h */
 
 #ifdef NO_JOHN_BLD
 #define JOHN_BLD "unk-build-type"
@@ -105,14 +107,12 @@ extern char CPU_req_name[];
  */
 static void listconf_list_options()
 {
-	puts("help[:WHAT], subformats, inc-modes, rules, externals, ext-modes");
-	puts("ext-hybrids, ext-filters, ext-filters-only, build-info, encodings");
-	puts("formats, format-details, format-all-details, format-methods[:WHICH],");
-	// With "opencl-devices, <conf section name>" added,
-	// the resulting line will get too long
-	puts("format-tests, sections, parameters:SECTION, list-data:SECTION,");
+	puts("help[:WHAT], subformats, inc-modes, rules, externals, ext-modes, ext-hybrids,");
+	puts("ext-filters, ext-filters-only, build-info, encodings, formats, format-classes,");
+	puts("format-details, format-all-details, format-methods[:WHICH], format-tests,");
+	printf("sections, parameters:SECTION, list-data:SECTION, ");
 #if HAVE_OPENCL
-	printf("opencl-devices, ");
+	puts("opencl-devices,");
 #endif
 	/* NOTE: The following must end the list. Anything listed after
 	   <conf section name> will be ignored by current
@@ -142,12 +142,8 @@ static void listconf_list_build_info(void)
 #ifdef __GNU_MP_VERSION
 	int gmp_major, gmp_minor, gmp_patchlevel;
 #endif
-	sTimer test;
-
-	sTimer_Init(&test);
-
 	puts("Version: " JTR_GIT_VERSION);
-	puts("Build: " JOHN_BLD _MP_VERSION DEBUG_STRING ASAN_STRING UBSAN_STRING);
+	puts("Build: " JOHN_BLD _MP_VERSION OCL_STRING ZTEX_STRING DEBUG_STRING ASAN_STRING UBSAN_STRING);
 #ifdef SIMD_COEF_32
 	printf("SIMD: %s, interleaving: MD4:%d MD5:%d SHA1:%d SHA256:%d SHA512:%d\n",
 	       SIMD_TYPE,
@@ -231,11 +227,10 @@ static void listconf_list_build_info(void)
 #if HAVE_OPENCL
 	printf("OpenCL headers version: %s\n",get_opencl_header_version());
 #endif
-#if HAVE_LIBSSL
+#if HAVE_LIBCRYPTO
 	printf("Crypto library: OpenSSL\n");
-#endif
-#if HAVE_COMMONCRYPTO
-	printf("Crypto library: CommonCrypto\n");
+#else
+	printf("Crypto library: None\n");
 #endif
 
 #if HAVE_LIBDL && defined(RTLD_DEFAULT)
@@ -323,13 +318,15 @@ static void listconf_list_build_info(void)
 	printf("times(2) CLK_TCK is %ld\n", clk_tck);
 #endif
 #if defined (__MINGW32__) || defined (_MSC_VER)
-	printf("Using clock(3) for timers, claimed resolution %ss, observed %ss\n",
-	       human_prefix_small(1.0 / CLOCKS_PER_SEC),
-	       human_prefix_small(1.0 / sm_cPrecision));
+	printf("Using clock(3) for timers, resolution %ss\n", human_prefix_small(1.0 / CLOCKS_PER_SEC));
 #else
 	printf("Using times(2) for timers, resolution %ss\n", human_prefix_small(1.0 / clk_tck));
 #endif
-	printf("HR timer claimed resolution %ss, observed %ss\n", human_prefix_small(1.0 / sm_HRTicksPerSec), human_prefix_small(1.0 / sm_hrPrecision));
+	int latency;
+	uint64_t precision = john_timer_stats(&latency);
+
+	printf("HR timer: %s, %s %ss\n", john_nano_clock, latency ? "latency" : "resolution",
+	       human_prefix_small(precision / 1000000000.0));
 
 	int64_t total_mem = host_total_mem();
 
@@ -420,6 +417,11 @@ void listconf_parse_early(void)
 			error_msg("--format not allowed with \"--list=%s\"\n", options.listconf);
 
 		listEncodings(stdout);
+		exit(EXIT_SUCCESS);
+	}
+	if (!strcasecmp(options.listconf, "format-classes"))
+	{
+		puts(fmt_class_list);
 		exit(EXIT_SUCCESS);
 	}
 }

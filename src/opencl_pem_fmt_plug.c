@@ -9,13 +9,13 @@
  * The OpenCL boilerplate code is borrowed from other OpenCL formats.
  */
 
-#ifdef HAVE_OPENCL
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_OPENCL && HAVE_LIBCRYPTO
 
 #include "arch.h"
-#if !AC_BUILT
-#define HAVE_LIBZ 1 /* legacy build has -lz in LDFLAGS */
-#endif
-#if HAVE_LIBZ
 
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_opencl_pem;
@@ -282,11 +282,11 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 	size_t scalar_gws;
 	size_t *lws = local_work_size ? &local_work_size : NULL;
 
-	global_work_size = GET_NEXT_MULTIPLE(count, local_work_size);
+	global_work_size = GET_KPC_MULTIPLE(count, local_work_size);
 	scalar_gws = global_work_size * ocl_v_width;
 
 	// Copy data to gpu
-	if (ocl_autotune_running || new_keys) {
+	if (new_keys) {
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0, key_buf_size, inbuffer, 0, NULL, multi_profilingEvent[0]), "Copy data to gpu");
 		new_keys = 0;
 	}
@@ -349,7 +349,7 @@ struct fmt_main fmt_opencl_pem = {
 		FMT_CASE | FMT_8_BIT | FMT_HUGE_INPUT,
 		{
 			"iteration count",
-			"cipher [1=3DES, 2/3/4=AES-128/192/256]",
+			"cipher [1=3DES 2/3/4=AES-128/192/256]",
 		},
 		{ FORMAT_TAG },
 		pem_tests
@@ -388,6 +388,4 @@ struct fmt_main fmt_opencl_pem = {
 
 #endif /* plugin stanza */
 
-#endif /* HAVE_LIBZ */
-
-#endif /* HAVE_OPENCL */
+#endif /* HAVE_OPENCL && HAVE_LIBCRYPTO */

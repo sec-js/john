@@ -26,6 +26,7 @@
 #include "charset.h"
 #include "external.h"
 #include "cracker.h"
+#include "suppressor.h"
 #include "john.h"
 #include "unicode.h"
 #include "mask.h"
@@ -496,27 +497,20 @@ void do_incremental_crack(struct db_main *db, const char *mode)
 	if (john_main_process)
 		log_event("Proceeding with \"incremental\" mode: %.100s", mode);
 
-	if ((options.flags & FLG_BATCH_CHK || rec_restored) && john_main_process) {
-		fprintf(stderr, "Proceeding with incremental:%s", mode);
-		if (options.flags & FLG_MASK_CHK)
-			fprintf(stderr, ", hybrid mask:%s", options.mask ?
-			        options.mask : options.eff_mask);
-		if (options.rule_stack)
-			fprintf(stderr, ", rules-stack:%s", options.rule_stack);
-		if (options.req_minlength >= 0 || options.req_maxlength)
-			fprintf(stderr, ", lengths: %d-%d",
-			        options.eff_minlength + mask_add_len,
-			        options.eff_maxlength + mask_add_len);
-		fprintf(stderr, "\n");
-	}
-
 	if (!(charset = cfg_get_param(SECTION_INC, mode, "File"))) {
 		if (cfg_get_section(SECTION_INC, mode) == NULL) {
-			log_event("! Unknown incremental mode: %s", mode);
-			if (john_main_process)
-				fprintf(stderr, "Unknown incremental mode: %s\n",
-				    mode);
-			error();
+			if (strlen(mode) > 4 && !strcmp(mode + strlen(mode) - 4, ".chr")) {
+				log_event("! Using charset file supplied as option: %s", mode);
+				if (john_main_process)
+					fprintf(stderr, "Using charset file supplied as option: %s\n", mode);
+				charset = mode;
+			} else {
+				log_event("! Unknown incremental mode: %s", mode);
+				if (john_main_process)
+					fprintf(stderr, "Unknown incremental mode: %s\n",
+					        mode);
+				error();
+			}
 		}
 		else {
 			log_event("! No charset defined");
@@ -534,14 +528,14 @@ void do_incremental_crack(struct db_main *db, const char *mode)
 	if ((max_length = cfg_get_int(SECTION_INC, mode, "MaxLen")) < 0)
 		max_length = MIN(CHARSET_LENGTH, options.eff_maxlength);
 	else if (max_length > our_fmt_len) {
-		log_event("! MaxLen = %d is too large for this hash type", max_length);
+		log_event("! MaxLen = %d is too large%s, reduced", max_length,
+		    options.force_maxlength ? "" : " for this hash type");
 		if (john_main_process && !options.force_maxlength)
 			fprintf(stderr, "Warning: MaxLen = %d is too large "
 			    "for the current hash type, reduced to %d\n",
 			    max_length, our_fmt_len);
 		max_length = our_fmt_len;
 	}
-
 
 	max_count = options.charcount ?
 		options.charcount : cfg_get_int(SECTION_INC, mode, "CharCount");
@@ -576,6 +570,20 @@ void do_incremental_crack(struct db_main *db, const char *mode)
 	    min_length > max_length &&
 	    options.eff_minlength <= CHARSET_LENGTH) {
 		max_length = min_length;
+	}
+
+	if (((options.flags & FLG_BATCH_CHK) || rec_restored) && john_main_process) {
+		fprintf(stderr, "Proceeding with incremental:%s", mode);
+		if (options.flags & FLG_MASK_CHK)
+			fprintf(stderr, ", hybrid mask:%s", options.mask ?
+			        options.mask : options.eff_mask);
+		if (options.rule_stack)
+			fprintf(stderr, ", rules-stack:%s", options.rule_stack);
+		if (min_length > 0 || options.req_maxlength)
+			fprintf(stderr, ", lengths: %d-%d",
+			        min_length + mask_add_len,
+			        max_length + mask_add_len);
+		fprintf(stderr, "\n");
 	}
 
 	if (min_length > max_length) {
@@ -783,9 +791,11 @@ void do_incremental_crack(struct db_main *db, const char *mode)
 		}
 	}
 
+	length = rec_length; /* should also match *ptr */
 	memcpy(numbers, rec_numbers, sizeof(numbers));
 
 	crk_init(db, fix_state, NULL);
+	suppressor_init(SUPPRESSOR_CHECK);
 
 	last_count = last_length = -1;
 
@@ -806,8 +816,10 @@ void do_incremental_crack(struct db_main *db, const char *mode)
 		    count >= CHARSET_SIZE)
 			inc_format_error(charset);
 
-		if (entry != rec_entry)
+		if (entry != rec_entry) {
 			memset(numbers, 0, sizeof(numbers));
+			status.resume_salt = 0; /* safety for manual edits */
+		}
 
 		if (count >= real_count || (fixed && !count))
 			continue;

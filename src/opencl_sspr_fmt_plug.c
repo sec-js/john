@@ -41,9 +41,6 @@ john_register_one(&fmt_opencl_sspr);
 #define BENCHMARK_COMMENT       ""
 #define BENCHMARK_LENGTH        0x107
 #define PLAINTEXT_LENGTH        64
-#define BINARY_ALIGN            MEM_ALIGN_WORD
-#define SALT_SIZE               sizeof(struct custom_salt)
-#define SALT_ALIGN              4
 #define MIN_KEYS_PER_CRYPT      1
 #define MAX_KEYS_PER_CRYPT      1
 #define SALT_LENGTH             32
@@ -89,6 +86,7 @@ static struct fmt_main *self;
 static cl_kernel sspr_kernel[5], loop_kernel[5];
 
 static size_t insize, outsize, settingsize;
+static int new_keys;
 
 #define STEP			0
 #define SEED			256
@@ -275,7 +273,6 @@ static void set_salt(void *salt)
 	HANDLE_CLERROR(clFlush(queue[gpu_id]), "failed in clFlush");
 }
 
-#undef set_key
 static void set_key(char *key, int index)
 {
 	uint32_t length = strlen(key);
@@ -284,6 +281,8 @@ static void set_key(char *key, int index)
 		length = PLAINTEXT_LENGTH;
 	inbuffer[index].length = length;
 	memcpy(inbuffer[index].v, key, length);
+
+	new_keys = 1;
 }
 
 static char *get_key(int index)
@@ -306,9 +305,13 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 	global_work_size = GET_NEXT_MULTIPLE(count, local_work_size);
 
 	// Copy data to gpu
-	BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0,
-		insize, inbuffer, 0, NULL, multi_profilingEvent[0]),
-		"Copy data to gpu");
+	if (new_keys) {
+		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0,
+			insize, inbuffer, 0, NULL, multi_profilingEvent[0]),
+			"Copy data to gpu");
+
+		new_keys = 0;
+	}
 
 	// Run 1st kernel
 	BENCH_CLERROR(clEnqueueNDRangeKernel(queue[gpu_id],

@@ -184,7 +184,7 @@ int *john_child_pids = NULL;
 #endif
 char *john_terminal_locale = "C";
 
-unsigned long long john_max_cands;
+uint64_t john_max_cands;
 
 static int children_ok = 1;
 
@@ -225,7 +225,7 @@ static void john_register_all(void)
 		if (strncasecmp(options.format, "dynamic=", 8)) {
 			strlwr(options.format);
 
-			if (strchr(options.format, ',')) {
+			if (options.format[0] != ',' && strchr(options.format, ',')) {
 				options.format_list = options.format;
 				options.format = NULL;
 			}
@@ -273,8 +273,9 @@ static void john_register_all(void)
 		error_msg("Could not parse format list '%s'\n", options.format_list);
 
 	if (!fmt_list) {
-		if (john_main_process)
-		fprintf(stderr, "Unknown ciphertext format name requested\n");
+		if (john_main_process) {
+			fprintf(stderr, "Error: No format matched requested %s '%s'\n", fmt_type(options.format), options.format);
+		}
 		error();
 	}
 }
@@ -499,6 +500,13 @@ static void john_omp_show_info(void)
 }
 #endif
 
+static void john_set_tristates(void)
+{
+	/* Config CrackStatus may be overridden by --crack-status tri-state */
+	if (options.crack_status == -1)
+		options.crack_status = cfg_get_bool(SECTION_OPTIONS, NULL, "CrackStatus", 0);
+}
+
 #if OS_FORK
 static void john_fork(void)
 {
@@ -527,6 +535,9 @@ static void john_fork(void)
 	pids = mem_alloc_tiny((options.fork - 1) * sizeof(*pids),
 	    sizeof(*pids));
 
+	unsigned int range = options.node_max - options.node_min + 1;
+	unsigned int npf = range / options.fork;
+
 	for (i = 1; i < options.fork; i++) {
 		switch ((pid = fork())) {
 		case -1:
@@ -534,8 +545,24 @@ static void john_fork(void)
 
 		case 0:
 			sig_preinit();
-			options.node_min += i;
-			options.node_max = options.node_min;
+			if (rec_restoring_now) {
+				unsigned int save_min = options.node_min;
+				unsigned int save_max = options.node_max;
+				unsigned int save_count = options.node_count;
+				unsigned int save_fork = options.fork;
+				options.node_min += i * npf;
+				options.node_max = options.node_min + npf - 1;
+				rec_done(-2);
+				rec_restore_args(1);
+				john_set_tristates();
+				if (options.node_min != save_min ||
+				    options.node_max != save_max ||
+				    options.node_count != save_count ||
+				    options.fork != save_fork)
+					error_msg("Inconsistent crash recovery file: %s\n", rec_name);
+			}
+			options.node_min += i * npf;
+			options.node_max = options.node_min + npf - 1;
 #if HAVE_OPENCL
 			/* Poor man's multi-device support */
 			if (options.acc_devices->count &&
@@ -553,16 +580,6 @@ static void john_fork(void)
 				usleep(i * 100000);
 			}
 #endif
-			if (rec_restoring_now) {
-				unsigned int node_id = options.node_min;
-				rec_done(-2);
-				rec_restore_args(1);
-				if (node_id != options.node_min + i)
-					fprintf(stderr,
-					    "Inconsistent crash recovery file:"
-					    " %s\n", rec_name);
-				options.node_min = options.node_max = node_id;
-			}
 			sig_init_child();
 			return;
 
@@ -570,6 +587,8 @@ static void john_fork(void)
 			pids[i - 1] = pid;
 		}
 	}
+
+	options.node_max = options.node_min + npf - 1;
 
 #if HAVE_OPENCL
 	/* Poor man's multi-device support */
@@ -589,8 +608,6 @@ static void john_fork(void)
 	john_main_process = 1;
 	john_child_pids = pids;
 	john_child_count = options.fork - 1;
-
-	options.node_max = options.node_min;
 }
 
 /*
@@ -600,23 +617,32 @@ static void john_fork(void)
 #if HAVE_MPI
 static void john_set_mpi(void)
 {
-	options.node_min += mpi_id;
-	options.node_max = options.node_min;
+	unsigned int range = options.node_max - options.node_min + 1;
+	unsigned int npf = range / mpi_p;
 
 	if (mpi_p > 1) {
 		if (!john_main_process) {
 			if (rec_restoring_now) {
-				unsigned int node_id = options.node_min;
+				unsigned int save_min = options.node_min;
+				unsigned int save_max = options.node_max;
+				unsigned int save_count = options.node_count;
+				unsigned int save_fork = options.fork;
+				options.node_min += mpi_id * npf;
+				options.node_max = options.node_min + npf - 1;
 				rec_done(-2);
 				rec_restore_args(1);
-				if (node_id != options.node_min + mpi_id)
-					fprintf(stderr,
-					    "Inconsistent crash recovery file:"
-					    " %s\n", rec_name);
-				options.node_min = options.node_max = node_id;
+				john_set_tristates();
+				if (options.node_min != save_min ||
+				    options.node_max != save_max ||
+				    options.node_count != save_count ||
+				    options.fork != save_fork)
+					error_msg("Inconsistent crash recovery file: %s\n", rec_name);
 			}
 		}
 	}
+	options.node_min += mpi_id * npf;
+	options.node_max = options.node_min + npf - 1;
+
 	fflush(stdout);
 	fflush(stderr);
 }
@@ -706,19 +732,36 @@ char *john_loaded_counts(struct db_main *db, char *prelude)
 	if (db->password_count == 0)
 		return "No remaining hashes";
 
-	if (db->password_count == 1) {
+	if (db->password_count == 1 && !options.regen_lost_salts) {
 		sprintf(buf, "%s 1 password hash", prelude);
 		return buf;
 	}
 
-	int p = sprintf(buf, "%s %d password hashes with %s different salts",
-	                prelude, db->password_count, db->salt_count > 1 ?
-	                jtr_itoa(db->salt_count, nbuf, 24, 10) : "no");
+	int salt_count = db->salt_count;
 
-	int b = (10 * db->password_count + (db->salt_count / 2)) / db->salt_count;
+	/* At the time we say "Loaded xx hashes", the regen code hasn't yet updated the salt_count */
+	if (options.regen_lost_salts && salt_count == 1)
+		salt_count = regen_salts_count;
 
-	if (p >= 0 && db->salt_count > 1 && b > 10)
-		sprintf(buf + p, " (%d.%dx same-salt boost)", b / 10, b % 10);
+	int p = sprintf(buf, "%s %d password hash%s with %s %s salts", prelude, db->password_count,
+	                db->password_count > 1 ? "es" : "",
+	                salt_count > 1 ? jtr_itoa(salt_count, nbuf, 24, 10) : "no",
+	                (salt_count > 1 && options.regen_lost_salts) ? "possible" : "different");
+
+	if (p >= 0) {
+		if (options.regen_lost_salts && db->password_count < salt_count) {
+			int bf_penalty = 10 * salt_count / db->password_count;
+
+			if (bf_penalty > 10)
+				sprintf(buf + p, " (%d.%dx salt BF penalty)", bf_penalty / 10, bf_penalty % 10);
+		} else {
+			int bf_penalty = options.regen_lost_salts ? regen_salts_count : 1;
+			int boost = (10 * bf_penalty * db->password_count + (salt_count / 2)) / salt_count;
+
+			if (salt_count > 1 && boost > 10)
+				sprintf(buf + p, " (%d.%dx same-salt boost)", boost / 10, boost % 10);
+		}
+	}
 
 	return buf;
 }
@@ -805,10 +848,6 @@ static void john_load_conf(void)
 		cfg_get_bool(SECTION_OPTIONS, NULL, "ReloadAtSave", 1);
 	options.abort_file = cfg_get_param(SECTION_OPTIONS, NULL, "AbortFile");
 	options.pause_file = cfg_get_param(SECTION_OPTIONS, NULL, "PauseFile");
-
-	/* Config CrackStatus may be overridden by --crack-status tri-state */
-	if (options.crack_status == -1)
-		options.crack_status = cfg_get_bool(SECTION_OPTIONS, NULL, "CrackStatus", 0);
 
 #if HAVE_OPENCL
 	if (cfg_get_bool(SECTION_OPTIONS, SUBSECTION_OPENCL, "ForceScalar", 0))
@@ -1191,6 +1230,9 @@ static void john_load(void)
 
 		ldr_fix_database(&database);
 
+		if (database.password_count && options.regen_lost_salts)
+			build_fake_salts_for_regen_lost(&database);
+
 		if (!database.password_count) {
 			log_discard();
 			if (john_main_process)
@@ -1228,10 +1270,9 @@ static void john_load(void)
 				       database.min_cost[i]);
 			}
 		}
-		if ((options.flags & FLG_PWD_REQ) && !database.salts) exit(0);
 
-		if (options.regen_lost_salts)
-			build_fake_salts_for_regen_lost(database.salts);
+		if ((options.flags & FLG_PWD_REQ) && !database.salts)
+			exit(0);
 	}
 
 /*
@@ -1511,6 +1552,9 @@ static void john_init(char *name, int argc, char **argv)
 	/* Process configuration options that depend on cfg_init() */
 	john_load_conf();
 
+	/* Stuff that need to be reset again after rec_restore_args */
+	john_set_tristates();
+
 #ifdef _OPENMP
 	john_omp_maybe_adjust_or_fallback(argv);
 #endif
@@ -1612,7 +1656,6 @@ static void john_init(char *name, int argc, char **argv)
 static void john_run(void)
 {
 	struct stat trigger_stat;
-	int trigger_reset = 0;
 
 	if (options.flags & FLG_TEST_CHK)
 		exit_status = benchmark_all() ? 1 : 0;
@@ -1626,7 +1669,6 @@ static void john_run(void)
 		options.loader.flags |= DB_WORDS;
 		list_init(&single_seed); /* Required for DB_WORDS */
 
-		ldr_init_database(&database, &options.loader);
 		exit_status = fuzz(&database);
 	}
 #endif
@@ -1662,7 +1704,6 @@ static void john_run(void)
 				    where);
 				error();
 			}
-			trigger_reset = 1;
 			log_init(LOG_NAME, options.activepot,
 			         options.session);
 			status_init(NULL, 1);
@@ -1737,8 +1778,14 @@ static void john_run(void)
 
 		omp_autotune_run(&database);
 
-		if (trigger_reset)
-			database.format->methods.reset(&database);
+		clock_t before = status_get_raw_time();
+
+		database.format->methods.reset(&database);
+
+		clock_t after = status_get_raw_time();
+
+		/* Disregard OpenCL build & autotune time, for stable ETA and speed figures */
+		status.start_time += (after - before);
 
 		if (!(options.flags & FLG_STDOUT) && john_main_process) {
 			john_log_format2();
@@ -1748,7 +1795,7 @@ static void john_run(void)
 		if (options.flags & FLG_MASK_CHK)
 			mask_crk_init(&database);
 
-		/* Placed here to disregard load time. */
+		/* Start our timers */
 		sig_init_late();
 
 		/* Start a resumed session by emitting a status line. */
@@ -1796,7 +1843,7 @@ static void john_run(void)
 		if (options.flags & FLG_MASK_CHK)
 			mask_done();
 
-		status_print();
+		status_print(0);
 
 		if (options.flags & FLG_MASK_CHK)
 			mask_destroy();
@@ -1857,6 +1904,12 @@ static void john_done(void)
 				        "Warning: incremental mask started at length %d"
 				        " - try the CPU format for shorter lengths.\n",
 				        mask_iter_warn);
+		}
+		if (event_abort && options.catchup && john_max_cands && status.cands >= john_max_cands) {
+			event_abort = 0;
+			log_event("Done catching up with '%s'", options.catchup);
+			if (john_main_process)
+				fprintf(stderr, "Done catching up with '%s'\n", options.catchup);
 		}
 		if (event_abort) {
 			char *abort_msg = (aborted_by_timer) ?

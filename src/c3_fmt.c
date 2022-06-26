@@ -223,7 +223,7 @@ static void init(struct fmt_main *self)
 			c = crypt(tests[i].plaintext, salt);
 #endif
 			if (c && strlen(c) >= 7)
-				tests[i].ciphertext = strdup(c);
+				tests[i].ciphertext = xstrdup(c);
 			else {
 				fprintf(stderr, "%s not supported on this system\n",
 				       options.subformat);
@@ -627,7 +627,7 @@ static int cmp_exact(char *source, int index)
 
 /*
  * For generic crypt(3), the algorithm is returned as the first "tunable cost":
- * 0: unknown (shouldn't happen
+ * 0: unknown (shouldn't happen)
  * 1: descrypt
  * 2: md5crypt
  * 3: sunmd5

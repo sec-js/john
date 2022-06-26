@@ -30,6 +30,7 @@ typedef struct {
 	uint has_extra;
 	uint extra[32/4];
 	volatile uint has_mitm;
+	uint mitm_reported;
 	uint mitm[8/4]; /* Meet-in-the-middle hint, if we have one */
 } salt_t;
 
@@ -459,8 +460,12 @@ void oldoffice_sha1(const nt_buffer_t *nt_buffer,
 			atomic_xchg(&cs->cracked, 1);
 	} else {
 		key[0] = sha1[0];
-		if (cs->type == 3) {
+		if (cs->type == 3) {	/* Truncate to 40 bits */
 			key[1] = sha1[1] & 0xff;
+			key[2] = 0;
+			key[3] = 0;
+		} else if (cs->type == 5) {	/* Truncate to 56 bits */
+			key[1] = sha1[1] & 0xffffff;
 			key[2] = 0;
 			key[3] = 0;
 		} else {
@@ -496,6 +501,9 @@ void oldoffice_sha1(const nt_buffer_t *nt_buffer,
 		else if (cs->type != 3 || !cs->has_extra)
 			*result = 1;
 		else {
+#if __OS_X__
+			uint W[64/4]; /* Driver bug workaround for Apple w/ Vega */
+#endif
 			for (i = 0; i < 5; i++)
 				W[i] = key2[i];
 			W[5] = 0x01000000;

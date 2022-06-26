@@ -1,3 +1,9 @@
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #include <openssl/des.h>
 
 #include "krb5_common.h"
@@ -252,7 +258,7 @@ void des_cbc_mac_shishi(char key[8], char iv[8], unsigned char *in, size_t inlen
 #endif
 
 	memcpy(dkey, key, 8);
-	DES_set_key((DES_cblock *)dkey, &dks);
+	DES_set_key_unchecked((DES_cblock *)dkey, &dks);
 	memcpy(ivec, iv, 8);
 	DES_cbc_encrypt(in, ct, inlen, &dks, &ivec, DES_ENCRYPT);
 	memcpy(out, ct + inlen - 8, 8);
@@ -330,3 +336,5 @@ int des_string_to_key_shishi(char *string, size_t stringlen,
 
 	return 0;
 }
+
+#endif /* HAVE_LIBCRYPTO */

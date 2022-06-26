@@ -331,12 +331,12 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 	int i, j;
 	size_t scalar_gws;
 	size_t *lws = local_work_size ? &local_work_size : NULL;
-	size_t gws = GET_NEXT_MULTIPLE(count, local_work_size);
+	size_t gws = GET_KPC_MULTIPLE(count, local_work_size);
 
 	scalar_gws = gws * ocl_v_width;
 
 	// Copy data to gpu
-	if (ocl_autotune_running || new_keys) {
+	if (new_keys) {
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0, key_buf_size, inbuffer, 0, NULL, multi_profilingEvent[0]), "Copy data to gpu");
 		new_keys = 0;
 	}

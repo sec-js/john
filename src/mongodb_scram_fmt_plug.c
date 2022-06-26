@@ -12,7 +12,6 @@ extern struct fmt_main fmt_mongodb_scram;
 john_register_one(&fmt_mongodb_scram);
 #else
 
-#include <openssl/sha.h>
 #include <string.h>
 
 #ifdef _OPENMP
@@ -100,7 +99,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	char *ctcopy, *keeptr, *p;
 	if (strncmp(ciphertext, FORMAT_TAG, FORMAT_TAG_LENGTH) != 0)
 		return 0;
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;;
 	ctcopy += FORMAT_TAG_LENGTH;
 	if ((p = strtokm(ctcopy, "$")) == NULL)	/* username */
@@ -134,7 +133,7 @@ static void *get_salt(char *ciphertext)
 	char *ctcopy, *keeptr, *p;
 
 	memset(&cs, 0, sizeof(cs));
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;;
 	ctcopy += FORMAT_TAG_LENGTH;
 	p = strtokm(ctcopy, "$");

@@ -95,8 +95,9 @@ struct db_salt;
  */
 #define FMT_DYNA_SALT			0x00000200
 /*
- * This format supports huge ciphertexts (larger than LINE_BUFFER_SIZE)
- * and may/will consequently truncate its pot lines with $SOURCE_HASH$
+ * This format supports huge ciphertexts (longer than MAX_CIPHERTEXT_SIZE,
+ * currently 896 bytes) and will consequently truncate its pot lines with
+ * $SOURCE_HASH$ to end up fitting within LINE_BUFFER_SIZE.
  */
 #define FMT_HUGE_INPUT			0x00000400
 /* Uses a bitslice implementation */
@@ -357,7 +358,8 @@ struct fmt_methods {
 
 /* Allow the previously set keys to be dropped if that would help improve
  * performance and/or reduce the impact of certain hardware faults. After
- * a call to clear_keys() the keys are undefined. */
+ * a call to clear_keys() the keys are undefined.  Jumbo guarantees this
+ * will be called before set_key(0). */
 	void (*clear_keys)(void);
 
 /* Computes the ciphertexts for given salt and plaintexts.
@@ -425,6 +427,11 @@ struct fmt_main {
  */
 extern char fmt_null_key[PLAINTEXT_BUFFER_SIZE];
 
+/*
+ * List of valid format classes for this build
+ */
+extern char fmt_class_list[];
+
 /* Self-test is running */
 extern int self_test_running;
 
@@ -443,6 +450,14 @@ extern struct fmt_main *fmt_list;
  * Format registration function.
  */
 extern void fmt_register(struct fmt_main *format);
+
+/*
+ * Returns true if name is a format class such as "opencl" or "dynamic"
+ */
+extern int fmt_is_class(char *name);
+
+/* Returns "class", "wildcard" or "name" */
+extern char* fmt_type(char *name);
 
 /*
  * Match req_format to format, supporting wildcards/groups/classes etc.

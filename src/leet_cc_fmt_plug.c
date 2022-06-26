@@ -18,11 +18,18 @@ extern struct fmt_main fmt_leet;
 john_register_one(&fmt_leet);
 #else
 
+#include <string.h>
+
 #include "arch.h"
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
 #include "openssl_local_overrides.h"
+#if HAVE_LIBCRYPTO
 #include <openssl/opensslv.h>
-#include <string.h>
+#endif
 #if (AC_BUILT && HAVE_WHIRLPOOL) ||	  \
    (!AC_BUILT && OPENSSL_VERSION_NUMBER >= 0x10000000 && !HAVE_NO_SSL_WHIRLPOOL)
 #include <openssl/whrlpool.h>
@@ -53,7 +60,7 @@ john_register_one(&fmt_leet);
 #define SHA512_TYPE          SHA512_ALGORITHM_NAME
 #define NBKEYS					(SIMD_COEF_64*SIMD_PARA_SHA512)
 #else
-#define SHA512_TYPE          "32/" ARCH_BITS_STR SHA2_LIB
+#define SHA512_TYPE          "32/" ARCH_BITS_STR
 #define NBKEYS					1
 #endif
 
@@ -124,7 +131,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	char *p, *q;
 
 	p = ciphertext;
-	q = strchr(p, '$'); // end of salt
+	q = strrchr(p, '$'); // end of salt
 	if (!q)
 		return 0;
 
@@ -157,7 +164,9 @@ static char *prepare(char *split_fields[10], struct fmt_main *self)
 	cp = mem_alloc(strlen(split_fields[0]) + strlen(split_fields[1]) + 2);
 	sprintf(cp, "%s$%s", split_fields[0], split_fields[1]);
 	if (valid(cp, self)) {
-		return cp;
+		char *cipher = str_alloc_copy(cp);
+		MEM_FREE(cp);
+		return cipher;
 	}
 	MEM_FREE(cp);
 	return split_fields[1];

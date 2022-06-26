@@ -2,6 +2,12 @@
  * Common code for the Apple Keychain format.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_OPENCL || HAVE_LIBCRYPTO
+
 #include "arch.h"
 #include "misc.h"
 #include "common.h"
@@ -26,7 +32,7 @@ int keychain_valid(char *ciphertext, struct fmt_main *self)
 
 	if (strncmp(ciphertext, FORMAT_TAG, FORMAT_TAG_LEN) != 0)
 		return 0;
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += FORMAT_TAG_LEN;
 	if ((p = strtokm(ctcopy, "*")) == NULL)	/* salt */
@@ -52,7 +58,7 @@ err:
 
 void *keychain_get_salt(char *ciphertext)
 {
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	int i;
 	char *p;
@@ -75,3 +81,5 @@ void *keychain_get_salt(char *ciphertext)
 	MEM_FREE(keeptr);
 	return (void *)&cs;
 }
+
+#endif /* HAVE_OPENCL || HAVE_LIBCRYPTO */

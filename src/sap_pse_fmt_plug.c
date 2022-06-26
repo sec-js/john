@@ -11,6 +11,12 @@
  * for making this work possible.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_sappse;
 #elif FMT_REGISTERS_H
@@ -107,12 +113,12 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 			pout[i] = key[i];
 			iout[i] = iv[i];
 		}
-		pkcs12_pbe_derive_key_simd(1,
+		pkcs12_pbe_derive_key_simd_sha1(
 				cur_salt->iterations,
 				MBEDTLS_PKCS12_DERIVE_KEY, (const unsigned char **)pin, lens,
 				cur_salt->salt, cur_salt->salt_size, pout, 24);
 
-		pkcs12_pbe_derive_key_simd(1,
+		pkcs12_pbe_derive_key_simd_sha1(
 				cur_salt->iterations,
 				MBEDTLS_PKCS12_DERIVE_IV, (const unsigned char **)pin, clens,
 				cur_salt->salt, cur_salt->salt_size, iout, 8);
@@ -141,9 +147,9 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 			DES_key_schedule ks1, ks2, ks3;
 
 			// pin encryption
-			DES_set_key((DES_cblock *) key[i], &ks1);
-			DES_set_key((DES_cblock *) (key[i]+8), &ks2);
-			DES_set_key((DES_cblock *) (key[i]+16), &ks3);
+			DES_set_key_unchecked((DES_cblock *) key[i], &ks1);
+			DES_set_key_unchecked((DES_cblock *) (key[i]+8), &ks2);
+			DES_set_key_unchecked((DES_cblock *) (key[i]+16), &ks3);
 			memcpy(ivec, iv[i], 8);
 			memcpy(input, saved_key[index+i], saved_len[index+i]);
 			padbyte = 8 - (saved_len[index+i] % 8);
@@ -243,3 +249,4 @@ struct fmt_main fmt_sappse = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

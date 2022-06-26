@@ -32,12 +32,14 @@
  */
 extern volatile int event_pending;	/* An event is pending */
 extern volatile int event_abort;	/* Abort requested */
+extern volatile int event_help;		/* Help message requested */
 extern volatile int event_reload;	/* Reload of pot file requested */
 extern volatile int event_save;		/* Save the crash recovery file */
 extern volatile int event_status;	/* Status display requested */
 extern volatile int event_delayed_status;	/* Status display requested after current batch */
 extern volatile int event_ticksafety;	/* System time in ticks may overflow */
-extern volatile int event_fix_state;    /* For cracker */
+extern volatile int event_fix_state;	/* For cracker */
+extern volatile int event_refresh_salt;	/* For defensive salt refresh every nth seconds */
 #ifdef HAVE_MPI
 extern volatile int event_mpiprobe;	/* MPI probe for messages requested */
 #endif
@@ -90,6 +92,12 @@ extern void sig_reset_timer(void);
  * sig_init() has already been called.
  */
 extern void sig_init_child(void);
+
+/*
+ * Prints a help message about supported keypresses and signals, then
+ * resets event_help.
+ */
+extern void sig_help(void);
 
 /*
  * Terminates the process if event_abort is set.

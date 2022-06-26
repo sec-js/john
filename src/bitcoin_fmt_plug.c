@@ -52,9 +52,9 @@ john_register_one(&fmt_bitcoin);
 #define ALGORITHM_NAME          "SHA512 AES " SHA512_ALGORITHM_NAME
 #else
 #if ARCH_BITS >= 64
-#define ALGORITHM_NAME          "SHA512 AES 64/" ARCH_BITS_STR SHA2_LIB
+#define ALGORITHM_NAME          "SHA512 AES 64/" ARCH_BITS_STR
 #else
-#define ALGORITHM_NAME          "SHA512 AES 32/" ARCH_BITS_STR SHA2_LIB
+#define ALGORITHM_NAME          "SHA512 AES 32/" ARCH_BITS_STR
 #endif
 #endif
 
@@ -84,6 +84,8 @@ john_register_one(&fmt_bitcoin);
 #define SZ                      128
 
 static struct fmt_tests bitcoin_tests[] = {
+	/* retroactively added hashcat's test vector for benchmark compatibility */
+	{"$bitcoin$96$c265931309b4a59307921cf054b4ec6b6e4554369be79802e94e16477645777d948ae1d375191831efc78e5acd1f0443$16$8017214013543185$200460$96$480008005625057442352316337722323437108374245623701184230273883222762730232857701607167815448714$66$014754433300175043011633205413774877455616682000536368706315333388", "hashcat"},
 	/* bitcoin wallet hashes */
 	{"$bitcoin$96$169ce74743c260678fbbba92e926198702fd84e46ba555190f6f3d82f6852e4adeaa340d2ac065288e8605f13d1d7c86$16$26049c64dda292d5$177864$96$62aee49c1967b5635b663fc3b047d8bc562f7000921453ab15b98e5a5f2d2adc74393e789fe15c5a3fbc4625536be98a$66$020027f255fbfa6d4c010a1a5984e487443c68e1b32869ccfde92e92005814fd27", "openwall"},
 	{"$bitcoin$96$bd97a08e00e38910550e76848949285b9702fe64460f70d464feb2b63f83e1194c745e58fa4a0f09ac35e5777c507839$16$26049c64dda292d5$258507$96$62aee49c1967b5635b663fc3b047d8bc562f7000921453ab15b98e5a5f2d2adc74393e789fe15c5a3fbc4625536be98a$66$020027f255fbfa6d4c010a1a5984e487443c68e1b32869ccfde92e92005814fd27", "password"},
@@ -149,7 +151,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	if (strncmp(ciphertext, FORMAT_TAG, FORMAT_TAG_LEN))
 		return 0;
 
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += FORMAT_TAG_LEN;
 
@@ -214,7 +216,7 @@ static void *get_salt(char *ciphertext)
 {
 	int i;
 	char *p;
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	static struct custom_salt cs;
 
@@ -283,11 +285,7 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 			// Now copy and convert hash1 from flat into SIMD_COEF_64 buffers.
 			for (i = 0; i < SHA512_DIGEST_LENGTH/sizeof(uint64_t); ++i) {
-#if COMMON_DIGEST_FOR_OPENSSL
-				key_iv[SIMD_COEF_64*i + (index2&(SIMD_COEF_64-1)) + index2/SIMD_COEF_64*SHA_BUF_SIZ*SIMD_COEF_64] = sha_ctx.hash[i];  // this is in BE format
-#else
 				key_iv[SIMD_COEF_64*i + (index2&(SIMD_COEF_64-1)) + index2/SIMD_COEF_64*SHA_BUF_SIZ*SIMD_COEF_64] = sha_ctx.h[i];
-#endif
 			}
 
 			// We need to set ONE time, the upper half of the data buffer.  We put the 0x80 byte (in BE format), at offset

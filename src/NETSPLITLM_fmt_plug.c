@@ -14,6 +14,12 @@
  * Code is in public domain.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_NETHALFLM;
 #elif FMT_REGISTERS_H
@@ -192,7 +198,7 @@ inline static void setup_des_key(unsigned char key_56[], DES_key_schedule *ks)
   key[6] = (key_56[5] << 2) | (key_56[6] >> 6);
   key[7] = (key_56[6] << 1);
 
-  DES_set_key(&key, ks);
+  DES_set_key_unchecked(&key, ks);
 }
 
 static int crypt_all(int *pcount, struct db_salt *salt)
@@ -257,7 +263,7 @@ static void netsplitlm_set_key(char *key, int index)
 	const unsigned char magic[] = {0x4b, 0x47, 0x53, 0x21, 0x40, 0x23, 0x24, 0x25};
 	DES_key_schedule ks;
 
-	strnzcpyn((char *)saved_plain[index], key, PLAINTEXT_LENGTH + 1);
+	strnzcpy((char *)saved_plain[index], key, PLAINTEXT_LENGTH + 1);
 
 	/* Upper-case password */
 	enc_strupper((char *)saved_plain[index]);
@@ -337,3 +343,4 @@ struct fmt_main fmt_NETHALFLM = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

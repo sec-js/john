@@ -14,6 +14,12 @@
  * See https://matt.ucc.asn.au/apple/ for more information.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_keychain;
 #elif FMT_REGISTERS_H
@@ -101,9 +107,9 @@ static int kcdecrypt(unsigned char *key, unsigned char *iv, unsigned char *data)
 	memcpy(key1, key, 8);
 	memcpy(key2, key + 8, 8);
 	memcpy(key3, key + 16, 8);
-	DES_set_key((DES_cblock *) key1, &ks1);
-	DES_set_key((DES_cblock *) key2, &ks2);
-	DES_set_key((DES_cblock *) key3, &ks3);
+	DES_set_key_unchecked((DES_cblock *) key1, &ks1);
+	DES_set_key_unchecked((DES_cblock *) key2, &ks2);
+	DES_set_key_unchecked((DES_cblock *) key3, &ks3);
 	memcpy(ivec, iv, 8);
 	DES_ede3_cbc_encrypt(data, out, CTLEN, &ks1, &ks2, &ks3, &ivec,  DES_DECRYPT);
 
@@ -230,3 +236,4 @@ struct fmt_main fmt_keychain = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

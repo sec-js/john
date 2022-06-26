@@ -31,7 +31,7 @@ try:
     from asn1crypto import pkcs12
 except ImportError:
     sys.stderr.write("asn1crypto is missing, run 'pip install --user asn1crypto' to install it!\n")
-    sys.exit(-1)
+    sys.exit(1)
 import os
 
 
@@ -91,4 +91,4 @@ if __name__ == "__main__":
         sys.stderr.write("Usage: %s <.pfx file(s)>\n" % sys.argv[0])
 
     for i in range(1, len(sys.argv)):
-        parse_pkcs12(sys.argv[1])
+        parse_pkcs12(sys.argv[i])

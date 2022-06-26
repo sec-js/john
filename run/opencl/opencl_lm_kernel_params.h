@@ -3,26 +3,6 @@
 
 typedef unsigned WORD vtype;
 
-/*
- * Some devices/drivers has problems with the optimized 'goto' program flow.
- * Some AMD driver versions can't build the "fast goto" version but those who
- * can runs faster. Hawaii on 14.9 fails, Tahiti on 14.9 does not (!?).
- *
- * Nvidia can build either kernel but GTX980 is significantly faster with the
- * "safe goto" version (7% faster for one salt, 16% for many salts).
- *
- * OSX' Intel HD4000 driver [1.2(Sep25 2014 22:26:04)] fails building the
- * "fast goto" version.
- */
-#if nvidia_sm_5x(DEVICE_INFO) || gpu_intel(DEVICE_INFO) ||	  \
-	(gpu_amd(DEVICE_INFO) && DEV_VER_MAJOR >= 1573 && !defined(__Tahiti__)) || \
-	(gpu_amd(DEVICE_INFO) && DEV_VER_MAJOR >= 1702)
-//#warning Using 'safe goto' kernel
-#define SAFE_GOTO
-#else
-//#warning Using 'fast goto' kernel
-#endif
-
 #if no_byte_addressable(DEVICE_INFO)
 #define RV7xx
 #endif
@@ -66,7 +46,7 @@ typedef unsigned WORD vtype;
 #endif
 
 #define vst_private(dst, ofs, src) 			\
-	*((__private vtype *)((__private lm_vector *)&(dst) + (ofs))) = (src)
+	*((vtype *)((lm_vector *)&(dst) + (ofs))) = (src)
 
 #define lm_clear_block_8(j) 			\
 	vst_private(B[j] , 0, zero); 			\
@@ -102,8 +82,8 @@ typedef unsigned WORD vtype;
 	for (bit = bits; bit < k; bit++)		\
 		hash |= ((((uint)B[32 + bit]) >> x) & 1) << bit;
 
-inline void cmp_final(__private unsigned lm_vector *B,
-		      __private unsigned int *binary,
+inline void cmp_final(unsigned lm_vector *B,
+		      unsigned int *binary,
 		      __global unsigned int *offset_table,
 		      __global unsigned int *hash_table,
 		     volatile __global uint *output,
@@ -138,7 +118,7 @@ inline void cmp_final(__private unsigned lm_vector *B,
 	}
 }
 
-inline void cmp( __private unsigned lm_vector *B,
+inline void cmp( unsigned lm_vector *B,
 		 __global unsigned int *offset_table,
 		 __global unsigned int *hash_table,
 		  __global unsigned int *bitmaps,

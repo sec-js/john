@@ -31,6 +31,7 @@ def process_file(filename):
 
     data = open(filename, "rb").read()
     if not data.startswith(HEADER):
+        sys.stderr.write("File doesn't start with %s\n" % HEADER)
         return
 
     tmpdata = data.splitlines()
@@ -57,7 +58,7 @@ def process_file(filename):
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.stderr.write("Usage: %s [Ansible Vault .yml file(s)]\n" % sys.argv[0])
-        sys.exit(-1)
+        sys.exit(1)
 
     for i in range(1, len(sys.argv)):
         process_file(sys.argv[i])

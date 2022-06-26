@@ -43,7 +43,7 @@ john_register_one(&fmt_FG2);
 #include "common.h"
 #include "formats.h"
 #include "misc.h"
-#include "sha.h"
+#include "sha2.h"
 #include "base64_convert.h"
 
 #define FORMAT_LABEL            "Fortigate256"
@@ -101,6 +101,8 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	if (strncmp(ciphertext, "SH2", 3))
 		return 0;
 	if (strlen(ciphertext) != HASH_LENGTH)
+		return 0;
+	if (ciphertext[HASH_LENGTH - 1] != '=')
 		return 0;
 
 	return 1;

@@ -147,7 +147,10 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 			}
 
 			/* get SHA1 of mask_key */
-			SHA1(mask_key[i], 32, hashed_mask_key);
+			SHA_CTX ctx;
+			SHA1_Init(&ctx);
+			SHA1_Update(&ctx, mask_key[i], 32);
+			SHA1_Final(hashed_mask_key, &ctx);
 
 			hmac_sha1(hashed_mask_key, OPENBSD_SOFTRAID_MACLENGTH,
 					unmasked_keys, OPENBSD_SOFTRAID_KEYLENGTH * OPENBSD_SOFTRAID_KEYS,
@@ -182,7 +185,7 @@ static int cmp_exact(char *source, int index)
 
 static void set_key(char* key, int index)
 {
-	strnzcpyn(key_buffer[index], key, sizeof(*key_buffer));
+	strnzcpy(key_buffer[index], key, sizeof(*key_buffer));
 }
 
 static char *get_key(int index)

@@ -14,6 +14,8 @@
 
 
 struct fmt_tests sha1crypt_common_tests[] = {
+	/* retroactively added hashcat's test vector for benchmark compatibility */
+	{"$sha1$20000$75552156$HhYMDdaEHiK3eMIzTldOFPnw.s2Q", "hashcat"},
 	{"$sha1$64000$wnUR8T1U$vt1TFQ50tBMFgkflAFAOer2CwdYZ", "password"},
 	{"$sha1$40000$jtNX3nZ2$hBNaIXkt4wBI2o5rsi8KejSjNqIq", "password"},
 	{"$sha1$64000$wnUR8T1U$wmwnhQ4lpo/5isi5iewkrHN7DjrT", "123456"},
@@ -29,7 +31,7 @@ int sha1crypt_common_valid(char * ciphertext, struct fmt_main * self) {
 		return 0;
 
 	// validate rounds
-	keeptr = strdup(ciphertext);
+	keeptr = xstrdup(ciphertext);
 	p = &keeptr[SHA1_MAGIC_LEN];
 	if ((p = strtokm(p, "$")) == NULL)	/* rounds */
 		goto err;

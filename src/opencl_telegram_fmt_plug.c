@@ -9,7 +9,11 @@
  * The OpenCL boilerplate code is borrowed from other OpenCL formats.
  */
 
-#ifdef HAVE_OPENCL
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_OPENCL
 
 #include "arch.h"
 
@@ -24,7 +28,6 @@ john_register_one(&fmt_opencl_telegram);
 
 #include "formats.h"
 #include "common.h"
-#define OPENCL_FORMAT
 #include "telegram_common.h"
 #include "options.h"
 #include "jumbo.h"
@@ -237,7 +240,7 @@ static void reset(struct db_main *db)
 static void *get_salt(char *ciphertext)
 {
 	static struct custom_salt cs;
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	char *p;
 	int i;
@@ -245,7 +248,7 @@ static void *get_salt(char *ciphertext)
 	memset(&cs, 0, sizeof(struct custom_salt));
 	ctcopy += TAG_LENGTH;
 	p = strtokm(ctcopy, "*");
-	/* cs.version = atoi(p); */
+	cs.version = atoi(p); /* must be 1 for now; 2 is rejected in valid() */
 	p = strtokm(NULL, "*");
 	cs.iterations = atoi(p);
 	p = strtokm(NULL, "*");
@@ -312,11 +315,11 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 	size_t scalar_gws;
 	size_t *lws = local_work_size ? &local_work_size : NULL;
 
-	global_work_size = GET_NEXT_MULTIPLE(count, local_work_size);
+	global_work_size = GET_KPC_MULTIPLE(count, local_work_size);
 	scalar_gws = global_work_size * ocl_v_width;
 
 	// Copy data to gpu
-	if (ocl_autotune_running || new_keys) {
+	if (new_keys) {
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0, key_buf_size, inbuffer, 0, NULL, multi_profilingEvent[0]), "Copy data to gpu");
 		new_keys = 0;
 	}

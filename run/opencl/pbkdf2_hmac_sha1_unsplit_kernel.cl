@@ -27,8 +27,6 @@
 #define hmac_sha1 u_hmac_sha1
 #define big_hmac_sha1 u_big_hmac_sha1
 
-#define SHA1_DIGEST_LENGTH 20
-
 typedef struct {
 	uint  length;
 	uchar v[KEYLEN];
@@ -47,7 +45,7 @@ typedef struct {
 } pbkdf2_salt;
 
 inline void preproc(__global const uchar *key, uint keylen,
-    __private uint *state, uint padding)
+    uint *state, uint padding)
 {
 	uint i;
 	uint W[16];
@@ -74,26 +72,26 @@ inline void preproc(__global const uchar *key, uint keylen,
 	state[4] = E + INIT_E;
 }
 
-inline void hmac_sha1(__private uint *output,
-    __private uint *ipad_state,
-    __private uint *opad_state,
+inline void hmac_sha1(uint *output,
+    uint *ipad_state,
+    uint *opad_state,
     __constant uchar *salt, int saltlen, uchar add)
 {
 	int i;
 	uint W[16];
 	uint A, B, C, D, E, temp, r[16];
-	uchar buf[64];
-	uint *src = (uint *) buf;
-	i = 64 / 4;
-	while (i--)
-		*src++ = 0;
-	//_memcpy(buf, salt, saltlen);
-	for (i = 0; i < saltlen; i++)
-		buf[i] = salt[i];
+	union {
+		uchar c[64];
+		uint w[64/4];
+	} buf;
 
-	buf[saltlen + 4] = 0x80;
-	buf[saltlen + 3] = add;
-	PUT_UINT32BE((64 + saltlen + 4) << 3, buf, 60);
+	for (i = 0; i < 16; i++)
+		buf.w[i] = 0;
+	memcpy_cp(buf.c, salt, saltlen);
+
+	buf.c[saltlen + 4] = 0x80;
+	buf.c[saltlen + 3] = add;
+	PUT_UINT32BE((64 + saltlen + 4) << 3, buf.c, 60);
 
 	A = ipad_state[0];
 	B = ipad_state[1];
@@ -102,7 +100,7 @@ inline void hmac_sha1(__private uint *output,
 	E = ipad_state[4];
 
 	for (i = 0; i < 16; i++)
-		GET_UINT32BE(W[i], buf, i * 4);
+		W[i] = SWAP32(buf.w[i]);
 
 	SHA1(A, B, C, D, E, W);
 
@@ -135,9 +133,9 @@ inline void hmac_sha1(__private uint *output,
 	output[4] = E;
 }
 
-inline void big_hmac_sha1(__private uint *input, uint inputlen,
-    __private uint *ipad_state,
-    __private uint *opad_state, __private uint *tmp_out, uint iterations)
+inline void big_hmac_sha1(uint *input, uint inputlen,
+    uint *ipad_state,
+    uint *opad_state, uint *tmp_out, uint iterations)
 {
 	uint i;
 	uint W[16];
@@ -209,6 +207,7 @@ inline void pbkdf2(__global const uchar *pass, uint passlen,
 
 	loops = (skip_bytes + outlen + (SHA1_DIGEST_LENGTH-1)) / SHA1_DIGEST_LENGTH;
 	loop = skip_bytes / SHA1_DIGEST_LENGTH + 1;
+	skip_bytes %= SHA1_DIGEST_LENGTH;
 
 	while (loop <= loops) {
 		uint tmp_out[5];
@@ -220,10 +219,7 @@ inline void pbkdf2(__global const uchar *pass, uint passlen,
 		              ipad_state, opad_state,
 		              tmp_out, iterations);
 
-		for (i = skip_bytes % SHA1_DIGEST_LENGTH;
-		     i < SHA1_DIGEST_LENGTH && accum < (outlen + 3) / 4 * 4;
-		     i++, accum++)
-		{
+		for (i = skip_bytes; i < SHA1_DIGEST_LENGTH && accum < (outlen + 3) / 4 * 4; i++, accum++) {
 			PUTCHAR_BE_G(out, accum, ((uchar*)tmp_out)[i]);
 		}
 

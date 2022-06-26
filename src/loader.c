@@ -209,17 +209,24 @@ static void read_file(struct db_main *db, char *name, int flags,
 	warn_enc = (john_main_process && (options.target_enc != ENC_RAW) &&
 	            cfg_get_bool(SECTION_OPTIONS, NULL, "WarnEncoding", 0));
 
-	if (flags & RF_ALLOW_DIR) {
-		if (stat(name, &file_stat)) {
-			if (flags & RF_ALLOW_MISSING)
-				if (errno == ENOENT) return;
-			pexit("stat: %s", path_expand(name));
-		} else
-			if (S_ISDIR(file_stat.st_mode)) return;
+	if (stat(path_expand(name), &file_stat)) {
+		if ((flags & RF_ALLOW_MISSING) && errno == ENOENT)
+			return;
+		pexit("stat: %s", path_expand(name));
+	}
+
+	if ((flags & RF_ALLOW_DIR) && S_ISDIR(file_stat.st_mode))
+		return;
+
+	if (ldr_in_pot && S_ISFIFO(file_stat.st_mode)) {
+		if (john_main_process)
+			fprintf(stderr, "Error, cannot use FIFO as pot file: %s\n", path_expand(name));
+		error();
 	}
 
 	if (!(file = fopen(path_expand(name), "r"))) {
-		if ((flags & RF_ALLOW_MISSING) && errno == ENOENT) return;
+		if ((flags & RF_ALLOW_MISSING) && errno == ENOENT)
+			return;
 		pexit("fopen: %s", path_expand(name));
 	}
 
@@ -241,15 +248,13 @@ static void read_file(struct db_main *db, char *name, int flags,
 			     options.input_enc == UTF_8)) {
 				if (!valid_utf8((UTF8*)u8check)) {
 					warn_enc = 0;
-					fprintf(stderr, "Warning: invalid UTF-8"
-					        " seen reading %s\n", name);
+					fprintf(stderr, "Warning: invalid UTF-8 seen reading %s\n", path_expand(name));
 				}
 			} else if (options.input_enc != UTF_8 &&
 			           (line != line_buf ||
 			            valid_utf8((UTF8*)u8check) > 1)) {
 				warn_enc = 0;
-				fprintf(stderr, "Warning: UTF-8 seen reading "
-				        "%s\n", name);
+				fprintf(stderr, "Warning: UTF-8 seen reading %s\n", path_expand(name));
 			}
 		}
 		process_line(db, line);
@@ -553,8 +558,7 @@ static int ldr_split_line(char **login, char **ciphertext,
 		*p = 0;
 		fields[0] = *login = no_username;
 		fields[1] = *ciphertext;
-		if (strnlen(*ciphertext, LINE_BUFFER_SIZE + 1) >
-		    LINE_BUFFER_SIZE) {
+		if (strnlen(*ciphertext, MAX_CIPHERTEXT_SIZE + 1) > MAX_CIPHERTEXT_SIZE) {
 			huge_line = 1;
 		}
 	}
@@ -596,7 +600,7 @@ static int ldr_split_line(char **login, char **ciphertext,
 	gid = fields[3];
 	shell = fields[6];
 
-	if (SPLFLEN(1) > LINE_BUFFER_SIZE) {
+	if (SPLFLEN(1) > MAX_CIPHERTEXT_SIZE) {
 		huge_line = 1;
 	}
 	else if (SPLFLEN(2) == 32 || SPLFLEN(3) == 32) {
@@ -1280,6 +1284,7 @@ struct db_main *ldr_init_test_db(struct fmt_main *format, struct db_main *real)
 
 	testdb = mem_alloc(sizeof(struct db_main));
 
+	self_test_running++;
 	fmt_init(format);
 	dyna_salt_init(format);
 	ldr_init_database(testdb, &options.loader);
@@ -1289,7 +1294,6 @@ struct db_main *ldr_init_test_db(struct fmt_main *format, struct db_main *real)
 	ldr_init_password_hash(testdb);
 
 	ldr_loading_testdb = 1;
-	self_test_running++;
 	while (current->ciphertext) {
 		char *ex_len_line = NULL;
 		char _line[LINE_BUFFER_SIZE], *line = _line;
@@ -1559,12 +1563,6 @@ static void ldr_show_left(struct db_main *db, struct db_password *pw)
 	char *pw_source = db->format->methods.source(pw->source, pw->binary);
 	char *login = (db->options->flags & DB_LOGIN) ? pw->login : "?";
 
-#ifndef DYNAMIC_DISABLED
-	/* Note for salted dynamic, we 'may' need to fix up the salts to
-	 * make them properly usable. */
-	if (!strncmp(pw_source, "$dynamic_", 9))
-		pw_source = dynamic_FIX_SALT_TO_HEX(pw_source);
-#endif
 	if (options.show_uid_in_cracks && pw->uid && *pw->uid) {
 		uid_sep[0] = db->options->field_sep_char;
 		uid_out = pw->uid;
@@ -1896,7 +1894,15 @@ static void ldr_fill_user_words(struct db_main *db)
 	int last_count = 0;
 	FILE *file;
 	const char *name = path_expand(options.seed_per_user);
-	char line[LINE_BUFFER_SIZE];
+	union {
+		char buffer[LINE_BUFFER_SIZE];
+#if MGETL_HAS_SIMD
+		vtype dummy;
+#else
+		ARCH_WORD dummy;
+#endif
+	} aligned;
+	char *line = aligned.buffer;
 	size_t file_len;
 	int tot_num = 0;
 	int seeds_sorted = MAYBE | SORTED;
@@ -1927,7 +1933,9 @@ static void ldr_fill_user_words(struct db_main *db)
 	} else {
 		map_pos = mem_map;
 		map_end = mem_map + file_len;
+#if MGETL_HAS_SIMD
 		map_scan_end = map_end - VSCANSZ;
+#endif
 	}
 #endif /* HAVE_MMAP */
 
@@ -2161,43 +2169,105 @@ out:
 	return hash;
 }
 
+static int drop_regen_salt(char *line)
+{
+	char *sdl;
+
+	if ((sdl= strrchr(line, '$'))) {
+		*sdl = 0;
+		return 1;
+	}
+	return 0;
+}
+
 static void ldr_show_pot_line(struct db_main *db, char *line)
 {
 	char *ciphertext, *pos;
 	int hash;
 	struct db_cracked *current, *last;
+	static struct fmt_main *last_fmt;
 
 	ciphertext = ldr_get_field(&line, db->options->field_sep_char);
 
 	if (line) {
+/*
+ * Jumbo-specific; split() needed for legacy pot entries so we need to
+ * enumerate formats to know which to call.
+ * This also takes care of the situation where specific format(s) was
+ * requested for --make-charset.
+ */
+		struct fmt_main *format = fmt_list;
+
+		if (last_fmt && (ldr_trunc_valid(ciphertext, last_fmt) == 1))
+			format = last_fmt;
+		else
+		if (!(db->options->flags & DB_PLAINTEXTS) || (options.flags & FLG_FORMAT)) {
+			do {
+				if (format != last_fmt && ldr_trunc_valid(ciphertext, format) == 1)
+					break;
+			} while ((format = format->next));
+
+			if (format)
+				last_fmt = format;
+		}
+
+/* If format(s) was forced on the command line, insist on it (them) */
+		if (!format && (options.flags & FLG_FORMAT))
+			return;
+
 		pos = line;
 		do {
 			if (*pos == '\r' || *pos == '\n') *pos = 0;
 		} while (*pos++);
 
 		if (db->options->flags & DB_PLAINTEXTS) {
+			if (options.flags & FLG_MAKECHR_CHK) {
+				if (options.target_enc > ASCII && options.target_enc < UTF_8) {
+					char *plain = ldr_conv(line);
+
+					/* Only load words that fit our selected codepage */
+					if (plain != line && strlen(plain) != strlen8((UTF8*)line))
+						return;
+					else
+						line = plain;
+				} else if (options.target_enc == UTF_8) {
+					/* Only load words that are valid UTF-8 */
+					if (!valid_utf8((UTF8*)line))
+						return;
+				}
+			}
 			list_add(db->plaintexts, line);
 			return;
 		}
-/*
- * Jumbo-specific; split() needed for legacy pot entries so we need to
- * enumerate formats and call valid(). This also takes care of the situation
- * where a specific format was requested.
- */
-		if (!(options.flags & FLG_MAKECHR_CHK)) {
-			struct fmt_main *format = fmt_list;
 
-			do {
-				if (ldr_trunc_valid(ciphertext, format) == 1)
-					break;
-			} while((format = format->next));
+		/*
+		 * Bodge for --show to work w/ --regen-lost-salts
+		 *
+		 * This requires you to supply the same --regen-lost-salts parameters with --show
+		 * as what what used during cracking (actually just the total length need to match)
+		 */
+		if (options.regen_lost_salts) {
+			char *p;
 
-			if (!format)
-				return;
-
-			ciphertext =
-				format->methods.split(ciphertext, 0, format);
+			if (!strncmp(ciphertext, "$dynamic_", 9)) {
+				p = ciphertext + 10;
+				if ((p = strchr(p, '$')))
+					p++;
+				if (drop_regen_salt(p))
+					ciphertext = p;
+			} else
+			if (!strncmp(ciphertext, "@dynamic=", 9)) {
+				p = ciphertext + 10;
+				if ((p = strchr(p, '@')))
+					p++;
+				if (drop_regen_salt(p))
+					ciphertext = p;
+			}
 		}
+
+		if (format)
+			ciphertext = format->methods.split(ciphertext, 0, format);
+
 		hash = ldr_cracked_hash(ciphertext);
 
 		last = db->cracked_hash[hash];

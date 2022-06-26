@@ -1,5 +1,5 @@
 #include "arch.h"
-#if !AC_BUILT
+#if !AC_BUILT && !__MIC__
 #define HAVE_LIBZ 1 /* legacy build has -lz in LDFLAGS */
 #endif
 #if HAVE_LIBZ
@@ -33,7 +33,7 @@ int dashlane_valid(char *ciphertext, struct fmt_main *self)
 
 	if (strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH) != 0)
 		return 0;
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += TAG_LENGTH;
 	if ((p = strtokm(ctcopy, "*")) == NULL) // type
@@ -71,7 +71,7 @@ err:
 void *dashlane_get_salt(char *ciphertext)
 {
 	static struct custom_salt cs;
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	char *p;
 	int i;

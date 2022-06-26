@@ -32,6 +32,12 @@
   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_KRB4;
 #elif FMT_REGISTERS_H
@@ -226,7 +232,7 @@ static int cmp_all(void *binary, int count)
 {
 	DES_cblock tmp;
 
-	DES_set_key(&saved_key.key, &saved_key.sched);
+	DES_set_key_unchecked(&saved_key.key, &saved_key.sched);
 
 	DES_pcbc_encrypt(saved_salt->tgt, (unsigned char *)&tmp,
 	                 sizeof(tmp), &saved_key.sched,
@@ -309,3 +315,4 @@ struct fmt_main fmt_KRB4 = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

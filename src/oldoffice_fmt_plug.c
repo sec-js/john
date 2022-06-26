@@ -107,11 +107,10 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 			MD5_Init(&ctx);
 			MD5_Update(&ctx, hashBuf, 21 * 16);
 			MD5_Final(mitm_key[index], &ctx);
+			memset(&mitm_key[index][5], 0, 11); // Truncate to 40 bits
 
-			memcpy(hashBuf, mitm_key[index], 5);
-			memset(hashBuf + 5, 0, 4);
 			MD5_Init(&ctx);
-			MD5_Update(&ctx, hashBuf, 9);
+			MD5_Update(&ctx, mitm_key[index], 9);
 			MD5_Final(rc4_key[index], &ctx);
 		}
 		else {
@@ -130,7 +129,11 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 			if (oo_cur_salt->type < 4) {
 				memcpy(mitm_key[index], key_hash, 5);
-				memset(&mitm_key[index][5], 0, 11);
+				memset(&mitm_key[index][5], 0, 11); // Truncate to 40 bits
+			} else
+			if (oo_cur_salt->type == 5) {
+				memcpy(mitm_key[index], key_hash, 7);
+				memset(&mitm_key[index][7], 0, 9); // Truncate to 56 bits
 			} else
 				memcpy(mitm_key[index], key_hash, 16);
 
@@ -159,7 +162,10 @@ static int cmp_all(void *binary, int count)
 		if (oo_cur_salt->type < 3) {
 			MD5_CTX ctx;
 			unsigned char pwdHash[16];
-			unsigned char hashBuf[21 * 16];
+			unsigned char hashBuf[32];
+
+			if (cur_binary->has_mitm && memcmp(cur_binary->mitm, mitm_key[index], 5))
+				continue;
 
 			RC4_set_key(&key, 16, rc4_key[index]); /* rc4Key */
 			RC4(&key, 16, cur_binary->verifier, hashBuf); /* encryptedVerifier */
@@ -183,6 +189,10 @@ static int cmp_all(void *binary, int count)
 			unsigned char Hfinal[20];
 			unsigned char DecryptedVerifier[16];
 			unsigned char DecryptedVerifierHash[20];
+
+			if (oo_cur_salt->type == 3 && !cur_binary->has_extra &&
+			    cur_binary->has_mitm && memcmp(cur_binary->mitm, mitm_key[index], 5))
+				continue;
 
 			RC4_set_key(&key, 16, mitm_key[index]); /* dek */
 			RC4(&key, 16, cur_binary->verifier, DecryptedVerifier);
@@ -265,7 +275,7 @@ struct fmt_main fmt_oldoffice = {
 		MAX_KEYS_PER_CRYPT,
 		FMT_CASE | FMT_8_BIT | FMT_OMP | FMT_UNICODE | FMT_ENC | FMT_SPLIT_UNIFIES_CASE | FMT_BLOB,
 		{
-			"hash type",
+			"hash type [0-1:MD5+RC4-40 3:SHA1+RC4-40 4:SHA1+RC4-128 5:SHA1+RC4-56]",
 		},
 		{ FORMAT_TAG },
 		oldoffice_tests

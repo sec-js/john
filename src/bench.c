@@ -51,6 +51,7 @@
 #include "gpu_common.h"
 #include "opencl_common.h"
 #include "mask.h"
+#include "mask_ext.h"
 #include "aligned.h"
 
 #ifndef BENCH_BUILD
@@ -344,7 +345,6 @@ char *benchmark_format(struct fmt_main *format, int salts,
 {
 	static void *binary = NULL;
 	static int binary_size = 0;
-	static char s_error[128];
 	static int wait_salts = 0;
 	struct fmt_tests *current;
 	int pass;
@@ -362,7 +362,7 @@ char *benchmark_format(struct fmt_main *format, int salts,
 #ifndef BENCH_BUILD
 	struct db_salt *two_salts_db[2];
 	unsigned int t_cost[2][FMT_TUNABLE_COSTS];
-	int ntests, pruned, i;
+	int i;
 #endif
 	int salts_done = 0;
 	int wait = 0;
@@ -373,51 +373,16 @@ char *benchmark_format(struct fmt_main *format, int salts,
 	if (!(current = format->params.tests) || !current->ciphertext)
 		return "FAILED (no data)";
 
+	benchmark_running = 1;
 #ifndef BENCH_BUILD
 	dyna_salt_init(format);
-
-	pruned = 0;
-	for (i = 0; i < FMT_TUNABLE_COSTS; i++)
-	if (options.loader.min_cost[i] > 0 ||
-	    options.loader.max_cost[i] < UINT_MAX) {
-		unsigned int cost;
-
-		if (format->methods.tunable_cost_value[i] == NULL) {
-			sprintf(s_error,
-			        "FAILED (cost %d not defined for format)\n", i);
-			return s_error;
-		}
-
-		ntests = 0;
-		current = format->params.tests;
-		while ((current++)->ciphertext)
-			ntests++;
-
-		current = format->params.tests;
-		for (index = 0; index < ntests; index++) {
-			cost = get_cost(format, index, i);
-			if (cost >= options.loader.min_cost[i] &&
-			    cost <= options.loader.max_cost[i])
-				memcpy(current++,
-				       &format->params.tests[index],
-				       sizeof(struct fmt_tests));
-			else
-				pruned++;
-		}
-		memset(current, 0, sizeof(struct fmt_tests));
-	}
-
-	if (pruned && !format->params.tests->ciphertext) {
-		sprintf(s_error, "FAILED (--cost pruned all %d test vectors)\n",
-		        pruned);
-		return s_error;
-	}
 
 	current = format->params.tests;
 #endif
 #ifdef BENCH_BUILD
 	const char *where;
 	if ((where = fmt_self_test(format, test_db))) {
+		static char s_error[128];
 		snprintf(s_error, sizeof(s_error), "FAILED (%s)\n", where);
 		return s_error;
 	}
@@ -617,6 +582,8 @@ char *benchmark_format(struct fmt_main *format, int salts,
 	          (salts_done < (wait ? salts : MIN(salts, 2))) ||
 	          (10 * salts_done > 9 * salts && salts_done < salts)));
 
+	benchmark_running = 0;
+
 	BLOB_FREE(format, binary);
 
 #if defined (__MINGW32__) || defined (_MSC_VER)
@@ -713,12 +680,12 @@ int benchmark_all(void)
 #if defined(HAVE_OPENCL)
 	char s_gpu[16 * MAX_GPU_DEVICES] = "";
 	char s_gpu1[16 * MAX_GPU_DEVICES] = "";
-	int i;
 #else
 	const char *s_gpu = "";
 	const char *s_gpu1 = "";
 #endif
 #ifndef BENCH_BUILD
+	int i;
 	unsigned int loop_fail = 0, loop_total = 1;
 	int nvidia_mem = 0;
 #endif
@@ -729,8 +696,6 @@ int benchmark_all(void)
 	int ompt_start = omp_get_max_threads();
 #endif
 	const char *opencl_was_skipped = "";
-
-	benchmark_running = 1;
 
 #ifndef BENCH_BUILD
 #if defined(WITH_ASAN) || defined(WITH_UBSAN) || defined(DEBUG)
@@ -832,6 +797,13 @@ AGAIN:
 		if ((options.flags & FLG_LOOPTEST_CHK) && john_main_process)
 			printf("#%u ", loop_total);
 #endif
+#if defined(HAVE_OPENCL) || defined(HAVE_ZTEX)
+		int using_int_mask = (format->params.flags & FMT_MASK) && (options.flags & FLG_MASK_CHK) &&
+			options.req_int_cand_target != 0 && mask_int_cand_target;
+#elif !defined(BENCH_BUILD)
+		int using_int_mask = 0;
+#endif
+
 		if (john_main_process)
 		printf("%s: %s%s%s%s [%s%s%s%s]... ",
 		    benchmark_time ? "Benchmarking" : "Testing",
@@ -843,8 +815,7 @@ AGAIN:
 #ifndef BENCH_BUILD
 #define ENC_SET (!options.default_enc && options.target_enc != ENC_RAW && options.target_enc != ISO_8859_1)
 
-		    (benchmark_time && format->params.flags & FMT_MASK &&
-		     (options.flags & FLG_MASK_CHK)) ? "/mask accel" : "",
+		    (benchmark_time && using_int_mask) ? "/mask accel" : "",
 		    ENC_SET ? ", " : "",
 		    ENC_SET ? cp_id2name(options.target_enc) : "");
 #else
@@ -923,6 +894,45 @@ AGAIN:
 		if (options.flags & FLG_MASK_CHK)
 			mask_init(test_db, options.mask);
 
+		/* Prune test vectors for benchmark to honor --cost option */
+		struct fmt_tests *current;
+		int index, ntests, pruned = 0;
+
+		for (i = 0; i < FMT_TUNABLE_COSTS; i++) {
+			if (options.loader.min_cost[i] > 0 || options.loader.max_cost[i] < UINT_MAX) {
+				unsigned int cost;
+
+				if (format->methods.tunable_cost_value[i] == NULL) {
+					printf("FAILED (cost %d not defined for format)\n\n", i);
+					failed++;
+					format->methods.done();
+					goto next;
+				}
+
+				ntests = 0;
+				current = format->params.tests;
+				while ((current++)->ciphertext)
+					ntests++;
+
+				current = format->params.tests;
+				for (index = 0; index < ntests; index++) {
+					cost = get_cost(format, index, i);
+					if (cost >= options.loader.min_cost[i] && cost <= options.loader.max_cost[i])
+						memcpy(current++, &format->params.tests[index], sizeof(struct fmt_tests));
+					else
+						pruned++;
+				}
+				memset(current, 0, sizeof(struct fmt_tests));
+			}
+		}
+
+		if (pruned && !format->params.tests->ciphertext) {
+			printf("FAILED (--cost pruned all %d test vectors)\n\n", pruned);
+			failed++;
+			format->methods.done();
+			goto next;
+		}
+
 		/*
 		 * Re-init for benchmark.  While the self-tests were done with very
 		 * low work sizes, we now need a proper auto-tune for benchmark, with
@@ -930,10 +940,10 @@ AGAIN:
 		 */
 		format->methods.reset(test_db);
 #endif
-		if ((result = benchmark_format(format, salts,
-		                               &results_m, test_db))) {
+		if ((result = benchmark_format(format, salts, &results_m, test_db))) {
 			puts(result);
 			failed++;
+			format->methods.done();
 			goto next;
 		}
 #if HAVE_OPENCL
@@ -1079,28 +1089,26 @@ next:
 #endif
 	} while ((format = format->next) && !event_abort);
 
-	if (failed && total > 1 && !event_abort)
-		printf("%u out of %u tests have FAILED\n", failed, total);
-	else if (total > 1 && !event_abort)
-		if (john_main_process) {
-#ifndef BENCH_BUILD
-			if (options.flags & FLG_MASK_CHK)
-				printf("%u formats benchmarked.\n", total);
-			else
-#endif
-
 #ifdef HAVE_OPENCL
 /*
  * Allow OpenCL build's "--test" to run on no-OpenCL systems.
  * Print a message about no OpenCL at the end of the run.
  */
-				if (opencl_unavailable)
-					opencl_was_skipped = " (OpenCL formats skipped)";
+	if (opencl_unavailable)
+		opencl_was_skipped = " (OpenCL formats skipped)";
 #endif
 
-				printf("All %u formats passed self-tests!%s\n",
-				       total, opencl_was_skipped);
-		}
+	if (failed && total > 1 && !event_abort)
+		printf("%u out of %u tests have FAILED%s\n", failed, total, opencl_was_skipped);
+	else if (total > 1 && !event_abort && john_main_process) {
+#ifndef BENCH_BUILD
+		if (benchmark_time)
+			printf("%u formats benchmarked%s.\n", total, opencl_was_skipped);
+		else
+#endif
+			printf("All %u formats passed self-tests%s!\n", total, opencl_was_skipped);
+	}
+
 #ifndef BENCH_BUILD
 	if (options.flags & FLG_LOOPTEST_CHK) {
 		loop_total++;
@@ -1117,8 +1125,6 @@ next:
 		}
 	}
 #endif
-
-	benchmark_running = 0;
 
 	return failed || event_abort;
 }

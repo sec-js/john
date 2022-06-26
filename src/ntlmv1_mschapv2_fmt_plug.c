@@ -68,6 +68,12 @@
  *
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_MSCHAPv2_new;
 extern struct fmt_main fmt_NETNTLM_new;
@@ -238,7 +244,7 @@ inline static void setup_des_key(uchar key_56[], DES_key_schedule *ks)
 	key[6] = (key_56[5] << 2) | (key_56[6] >> 6);
 	key[7] = (key_56[6] << 1);
 
-	DES_set_key(&key, ks);
+	DES_set_key_unchecked(&key, ks);
 }
 
 static int chap_valid_long(char *ciphertext)
@@ -510,6 +516,9 @@ static char *chap_prepare(char *split_fields[10], struct fmt_main *pFmt)
 	if (!strncmp(split_fields[1], FORMAT_TAG, FORMAT_TAG_LEN)) {
 		// check for a short format that has any extra trash fields, and if so remove them.
 		char *cp1, *cp2, *cp3;
+		static char *out;
+		if (!out)
+			out = mem_alloc_tiny(FORMAT_TAG_LEN + CHAP_CHALLENGE_LENGTH/4 + 1 + CIPHERTEXT_LENGTH + 3, MEM_ALIGN_NONE);
 		cp1 = split_fields[1];
 		cp1 += FORMAT_TAG_LEN;
 		cp2 = strchr(cp1, '$');
@@ -517,8 +526,9 @@ static char *chap_prepare(char *split_fields[10], struct fmt_main *pFmt)
 		if (cp2 && cp2-cp1 == CHAP_CHALLENGE_LENGTH/4) {
 			++cp2;
 			cp3 = strchr(cp2, '$');
-			if (cp3 && cp3-cp2 == CIPHERTEXT_LENGTH && (strlen(cp3) > 2 || cp3[2] != '$')) {
-				ret = str_alloc_copy(split_fields[1]);
+			if (cp3 && cp3-cp2 == CIPHERTEXT_LENGTH && (strlen(cp3) > 2 || cp3[1] != '$')) {
+				ret = out;
+				memcpy(ret, split_fields[1], cp3-split_fields[1] + 1);
 				ret[(cp3-split_fields[1]) + 1] = '$';
 				ret[(cp3-split_fields[1]) + 2] = 0;
 				//printf("Here is the cut item: %s\n", ret);
@@ -1484,3 +1494,4 @@ struct fmt_main fmt_NETNTLM_new = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

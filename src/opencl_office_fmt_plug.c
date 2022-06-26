@@ -2,7 +2,7 @@
  * MS Office >= 2007 cracker for JtR. OpenCL support by magnum.
  *
  * This software is Copyright (c) 2012, Dhiru Kholia <dhiru.kholia at gmail.com>
- * and Copyright (c) 2012-2017, magnum
+ * and Copyright (c) 2012-2021, magnum
  * and it is hereby released to the general public under the following terms:
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted.
@@ -49,6 +49,8 @@ static struct fmt_tests tests[] = {
 	{"$office$*2010*100000*128*16*213aefcafd9f9188e78c1936cbb05a44*d5fc7691292ab6daf7903b9a8f8c8441*46bfac7fb87cd43bd0ab54ebc21c120df5fab7e6f11375e79ee044e663641d5e", "myhovercraftisfullofeels"},
 	/* 2013-openwall.pptx */
 	{"$office$*2013*100000*256*16*9b12805dd6d56f46d07315153f3ecb9c*c5a4a167b51faa6629f6a4caf0b4baa8*87397e0659b2a6fff90291f8e6d6d0018b750b792fefed77001edbafba7769cd", "openwall"},
+	/* Github issue #4780 (256-bit key length) */
+	{"$office$*2007*20*256*16*3e94c22e93f35e14162402da444dec28*7057eb00b1e0e1cce5c85ba0727e9686*ff4f3a5a9e872c364e6d83f07af904ce518b53e6", "12Qwaszx"},
 #if DEBUG
 	/* 2007-Default_myhovercraftisfullofeels_.dotx */
 	{"$office$*2007*20*128*16*56ea65016fbb4eac14a6770b2dbe7e99*8cf82ce1b62f01fd3b2c7666a2313302*21443fe938177e648c482da72212a8848c2e9c80", "myhovercraftisfullofeels"},
@@ -109,8 +111,8 @@ static cl_kernel Generate2010key;
 static cl_kernel GenerateSHA512pwhash, Loop13, Generate2013key;
 static struct fmt_main *self;
 
-#define HASH_LOOPS0710      500 /* Lower figure gives less X hogging */
-#define HASH_LOOPS13        100 /* Lower figure gives less X hogging */
+#define HASH_LOOPS0710      2500 /* Lower figure gives less X hogging */
+#define HASH_LOOPS13        500 /* Lower figure gives less X hogging */
 #define ITERATIONS2007      50000
 #define STEP                0
 #define SEED                128
@@ -205,7 +207,8 @@ static void create_clobj(size_t gws, struct fmt_main *self)
 
 	HANDLE_CLERROR(clSetKernelArg(Final2007, 0, sizeof(cl_mem), (void*)&cl_state), "Error setting argument 0");
 	HANDLE_CLERROR(clSetKernelArg(Final2007, 1, sizeof(cl_mem), (void*)&cl_out), "Error setting argument 1");
-	HANDLE_CLERROR(clSetKernelArg(Final2007, 2, sizeof(cl_mem), (void*)&cl_blob), "Error setting argument 2");
+	HANDLE_CLERROR(clSetKernelArg(Final2007, 2, sizeof(cl_mem), (void*)&cl_salt), "Error setting argument 2");
+	HANDLE_CLERROR(clSetKernelArg(Final2007, 3, sizeof(cl_mem), (void*)&cl_blob), "Error setting argument 3");
 
 	HANDLE_CLERROR(clSetKernelArg(Generate2010key, 0, sizeof(cl_mem), (void*)&cl_state), "Error setting argument 0");
 	HANDLE_CLERROR(clSetKernelArg(Generate2010key, 1, sizeof(cl_mem), (void*)&cl_out), "Error setting argument 1");
@@ -336,14 +339,21 @@ static void reset(struct db_main *db)
 		HANDLE_CLERROR(ret_code, "Error creating kernel. Double-check kernel name?");
 	}
 
+	int loops = HASH_LOOPS0710;
+	int iterations = ITERATIONS2007;
+
+	if (options.loader.min_cost[0]) {
+		iterations = options.loader.min_cost[0] == 2007 ? 50000 : 100000;
+		loops = options.loader.min_cost[0] == 2013 ? HASH_LOOPS13 : HASH_LOOPS0710;
+	}
+
 	// Initialize openCL tuning (library) for this format.
-	opencl_init_auto_setup(SEED, HASH_LOOPS0710, split_events, warn,
+	opencl_init_auto_setup(SEED, loops, split_events, warn,
 	                       3, self, create_clobj, release_clobj,
 	                       UNICODE_LENGTH, 0, db);
 
 	// Auto tune execution from shared/included code.
-	// We aim for just 10ms because 2013 will be slower
-	autotune_run(self, ITERATIONS2007 + 4, 0, 10);
+	autotune_run(self, iterations + 4, 0, 200);
 }
 
 static int crypt_all(int *pcount, struct db_salt *salt)
@@ -355,9 +365,10 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 	gws = GET_NEXT_MULTIPLE(count, local_work_size);
 
-	if (ocl_autotune_running || new_keys) {
+	if (new_keys) {
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], cl_saved_key, CL_FALSE, 0, UNICODE_LENGTH * gws, saved_key, 0, NULL, multi_profilingEvent[0]), "failed in clEnqueueWriteBuffer saved_key");
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], cl_saved_len, CL_FALSE, 0, sizeof(int) * gws, saved_len, 0, NULL, multi_profilingEvent[1]), "failed in clEnqueueWriteBuffer saved_len");
+
 		new_keys = 0;
 	}
 
@@ -365,21 +376,35 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 		BENCH_CLERROR(clEnqueueNDRangeKernel(queue[gpu_id], GenerateSHA512pwhash, 1, NULL, &gws, lws, 0, NULL, multi_profilingEvent[2]), "failed in clEnqueueNDRangeKernel");
 
+		// Better precision for WAIT_ macros
+		BENCH_CLERROR(clFinish(queue[gpu_id]), "clFinish");
+
+		WAIT_INIT(global_work_size)
 		for (index = 0; index < (ocl_autotune_running ? 1 : cur_salt->spinCount / HASH_LOOPS13); index++) {
 			BENCH_CLERROR(clEnqueueNDRangeKernel(queue[gpu_id], Loop13, 1, NULL, &gws, lws, 0, NULL, multi_profilingEvent[3]), "failed in clEnqueueNDRangeKernel");
+			WAIT_SLEEP
 			BENCH_CLERROR(clFinish(queue[gpu_id]), "Error running loop kernel");
+			WAIT_UPDATE
 			opencl_process_event();
 		}
+		WAIT_DONE
 
 	} else { /* 2007 or 2010 */
 
 		BENCH_CLERROR(clEnqueueNDRangeKernel(queue[gpu_id], GenerateSHA1pwhash, 1, NULL, &gws, lws, 0, NULL, multi_profilingEvent[2]), "failed in clEnqueueNDRangeKernel");
 
+		// Better precision for WAIT_ macros
+		BENCH_CLERROR(clFinish(queue[gpu_id]), "clFinish");
+
+		WAIT_INIT(global_work_size)
 		for (index = 0; index < (ocl_autotune_running ? 1 : cur_salt->spinCount / HASH_LOOPS0710); index++) {
 			BENCH_CLERROR(clEnqueueNDRangeKernel(queue[gpu_id], Loop0710, 1, NULL, &gws, lws, 0, NULL, multi_profilingEvent[3]), "failed in clEnqueueNDRangeKernel");
+			WAIT_SLEEP
 			BENCH_CLERROR(clFinish(queue[gpu_id]), "Error running loop kernel");
+			WAIT_UPDATE
 			opencl_process_event();
 		}
+		WAIT_DONE
 
 	}
 
@@ -412,7 +437,14 @@ static int cmp_all(void *binary, int count)
 	}
 
 	// Get results
-	BENCH_CLERROR(clEnqueueReadBuffer(queue[gpu_id], cl_out, CL_TRUE, 0, outsize, out, 0, NULL, multi_profilingEvent[5]), "failed in reading results");
+	BENCH_CLERROR(clEnqueueReadBuffer(queue[gpu_id], cl_out, CL_FALSE, 0, outsize, out, 0, NULL, multi_profilingEvent[5]), "failed in reading results");
+
+	WAIT_INIT(gws)
+	BENCH_CLERROR(clFlush(queue[gpu_id]), "clFlush");
+	WAIT_SLEEP
+	BENCH_CLERROR(clFinish(queue[gpu_id]), "clFinish");
+	WAIT_UPDATE
+	WAIT_DONE
 
 	for (index = 0; index < count; index++)
 		if (out[index].cracked)

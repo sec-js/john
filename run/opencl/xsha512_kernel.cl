@@ -9,7 +9,10 @@
 #include "opencl_sha2.h"
 
 typedef struct {
-	uint32_t buffer[32];	//1024 bits
+	union {
+		uint32_t u32[32];
+		uint64_t u64[16];
+	} buffer;	//1024 bits
 	uint32_t buflen;
 } xsha512_ctx;
 
@@ -21,8 +24,8 @@ typedef struct {
 inline void xsha512(__global const char *password, uint8_t pass_len,
 	__global uint64_t *hash, uint32_t offset, __constant uint32_t *salt)
 {
-	__private xsha512_ctx ctx;
-	uint32_t *b32 = ctx.buffer;
+	xsha512_ctx ctx;
+	uint32_t *b32 = ctx.buffer.u32;
 
 	//set salt to buffer
 	*b32 = *salt;
@@ -46,8 +49,7 @@ inline void xsha512(__global const char *password, uint8_t pass_len,
 	}
 
 	//append length to buffer
-	uint64_t *buffer64 = (uint64_t *)ctx.buffer;
-	buffer64[15] = SWAP64((uint64_t) ctx.buflen * 8);
+	ctx.buffer.u64[15] = SWAP64((uint64_t) ctx.buflen * 8);
 
 	// sha512 main
 	int i;
@@ -61,9 +63,9 @@ inline void xsha512(__global const char *password, uint8_t pass_len,
 	uint64_t g = 0x1f83d9abfb41bd6bUL;
 	uint64_t h = 0x5be0cd19137e2179UL;
 
-	__private uint64_t w[16];
+	uint64_t w[16];
 
-	uint64_t *data = (uint64_t *) ctx.buffer;
+	uint64_t *data = ctx.buffer.u64;
 
 #pragma unroll 16
 	for (i = 0; i < 16; i++)

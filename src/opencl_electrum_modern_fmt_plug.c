@@ -8,12 +8,17 @@
  * Based on opencl_pbkdf2_hmac_sha512_fmt_plug.c file.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
 #include "arch.h"
 #if !AC_BUILT
 #define HAVE_LIBZ 1
 #endif
 #if HAVE_LIBZ
-#ifdef HAVE_OPENCL
+
+#if HAVE_OPENCL && HAVE_LIBCRYPTO
 
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_opencl_electrum_modern;
@@ -106,6 +111,7 @@ typedef struct {
 	cl_uint rounds;
 } state_t;
 
+static int new_keys;
 static pass_t *host_pass;			      /** plain ciphertexts **/
 static salt_t *host_salt;			      /** salt **/
 static crack_t *host_crack;			      /** cracked or no **/
@@ -243,7 +249,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	if (strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH) != 0)
 		return 0;
 
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 
 	ctcopy += TAG_LENGTH;
@@ -265,7 +271,9 @@ static int valid(char *ciphertext, struct fmt_main *self)
 		goto err;
 	if ((p = strtokm(NULL, "*")) == NULL) // data
 		goto err;
-	if (hexlenl(p, &extra) > 32 * 2 || extra)
+	if (hexlenl(p, &extra) != 32 * 2 || extra)
+		goto err;
+	if (strtokm(NULL, "*")) // no more fields
 		goto err;
 
 	MEM_FREE(keeptr);
@@ -280,7 +288,7 @@ static void *get_salt(char *ciphertext)
 {
 	static struct custom_salt cs;
 	secp256k1_context *ctx;
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	char *p;
 	int i, length;
@@ -374,9 +382,13 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 	global_work_size = GET_NEXT_MULTIPLE(count, local_work_size);
 
 	// Copy data to gpu
-	BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0,
-		global_work_size * sizeof(pass_t), host_pass, 0, NULL,
-		multi_profilingEvent[0]), "Copy data to gpu");
+	if (new_keys) {
+		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0,
+			global_work_size * sizeof(pass_t), host_pass, 0, NULL,
+			multi_profilingEvent[0]), "Copy data to gpu");
+
+		new_keys = 0;
+	}
 
 	// Run kernel
 	BENCH_CLERROR(clEnqueueNDRangeKernel(queue[gpu_id], crypt_kernel, 1,
@@ -506,6 +518,8 @@ static void set_key(char *key, int index)
 	// ^= the whole uint64 with the ipad/opad mask
 	strncpy((char*)host_pass[index].v, key, PLAINTEXT_LENGTH);
 	host_pass[index].length = saved_len;
+
+	new_keys = 1;
 }
 
 static char *get_key(int index)
@@ -567,6 +581,6 @@ struct fmt_main fmt_opencl_electrum_modern = {
 
 #endif /* plugin stanza */
 
-#endif /* HAVE_OPENCL */
+#endif /* HAVE_OPENCL && HAVE_LIBCRYPTO */
 
 #endif /* HAVE_LIBZ */

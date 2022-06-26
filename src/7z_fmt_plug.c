@@ -19,7 +19,7 @@ john_register_one(&fmt_sevenzip);
 #include <string.h>
 
 #include "arch.h"
-#if !AC_BUILT
+#if !AC_BUILT && !__MIC__
 #define HAVE_LIBZ 1 /* legacy build has -lz in LDFLAGS */
 #endif
 #if HAVE_LIBZ
@@ -130,13 +130,14 @@ static void done(void)
 
 static void set_salt(void *salt)
 {
-	static int old_power;
+	static int old_power, old_size;
 
 	sevenzip_salt = *((sevenzip_salt_t**)salt);
 
-	if (old_power != sevenzip_salt->NumCyclesPower) {
+	if (sevenzip_salt->SaltSize || old_size || old_power != sevenzip_salt->NumCyclesPower) {
 		new_keys = 1;
 		old_power = sevenzip_salt->NumCyclesPower;
+		old_size = sevenzip_salt->SaltSize;
 	}
 }
 
@@ -365,6 +366,7 @@ struct fmt_main fmt_sevenzip = {
 			"iteration count",
 			"padding size",
 			"compression type",
+			"data length"
 		},
 		{ FORMAT_TAG },
 		sevenzip_tests
@@ -381,6 +383,7 @@ struct fmt_main fmt_sevenzip = {
 			sevenzip_iteration_count,
 			sevenzip_padding_size,
 			sevenzip_compression_type,
+			sevenzip_data_len
 		},
 		fmt_default_source,
 		{

@@ -51,9 +51,10 @@
 #include "recovery.h"
 #include "status.h"
 #include "john.h"
-#include "md5.h"
+#include "md4.h"
 #include "misc.h"
 #include "john_mpi.h"
+#include "timer.h"
 
 /* Set this to eg. 3 for some added debug and retry stuff */
 #define RACE_CONDITION_DEBUG 0
@@ -79,6 +80,7 @@ size_t ocl_max_lws;
 static char opencl_log[LOG_SIZE];
 static int opencl_initialized;
 int opencl_unavailable;
+int opencl_avoid_busy_wait[MAX_GPU_DEVICES];
 
 static void load_device_info(int sequential_id);
 static char* get_device_capability(int sequential_id);
@@ -142,10 +144,11 @@ void opencl_process_event(void)
 				rec_save();
 			}
 
-			if (event_status) {
-				event_status = 0;
-				status_print();
-			}
+			if (event_help)
+				sig_help();
+
+			if (event_status)
+				status_print(0);
 
 			if (event_ticksafety) {
 				event_ticksafety = 0;
@@ -390,39 +393,12 @@ static char *opencl_driver_info(int sequential_id)
 
 static char *ns2string(cl_ulong nanosec)
 {
-	char *buf = mem_alloc_tiny(16, MEM_ALIGN_NONE);
-	int s, ms, us, ns;
-
-	ns = nanosec % 1000;
-	nanosec /= 1000;
-	us = nanosec % 1000;
-	nanosec /= 1000;
-	ms = nanosec % 1000;
-	s = nanosec / 1000;
-
-	if (s) {
-		if (ms)
-			snprintf(buf, 16, "%d.%03ds", s, ms);
-		else
-			snprintf(buf, 16, "%ds", s);
-	} else if (ms) {
-		if (us)
-			snprintf(buf, 16, "%d.%03dms", ms, us);
-		else
-			snprintf(buf, 16, "%dms", ms);
-	} else if (us) {
-		if (ns)
-			snprintf(buf, 16, "%d.%03dus", us, ns);
-		else
-			snprintf(buf, 16, "%dus", us);
-	} else
-		snprintf(buf, 16, "%dns", ns);
-	return buf;
+	return human_prefix_small(nanosec / 1E9);
 }
 
 static char *ms2string(int millisec)
 {
-	return ns2string(millisec * 1000000ULL);
+	return human_prefix_small(millisec / 1E3);
 }
 
 static int get_if_device_is_in_use(int sequential_id)
@@ -616,7 +592,7 @@ static int start_opencl_device(int sequential_id, int *err_type)
 		if (ret_code != CL_SUCCESS) {
 			fprintf(stderr, "%u: Error creating context for device %d "
 			        "(%d:%d): %s, %s\n",
-			        NODE, sequential_id,
+			        NODE, sequential_id + 1,
 			        get_platform_id(sequential_id),
 			        get_device_id(sequential_id), get_error_name(ret_code),
 			        retry < RACE_CONDITION_DEBUG ? "retrying" : "giving up");
@@ -634,7 +610,7 @@ static int start_opencl_device(int sequential_id, int *err_type)
 		if (ret_code != CL_SUCCESS) {
 			fprintf(stderr, "%u: Error creating command queue for "
 			        "device %d (%d:%d): %s, %s\n", NODE,
-			        sequential_id, get_platform_id(sequential_id),
+			        sequential_id + 1, get_platform_id(sequential_id),
 			        get_device_id(sequential_id), get_error_name(ret_code),
 			        retry < RACE_CONDITION_DEBUG ? "retrying" : "giving up");
 			if (++retry > RACE_CONDITION_DEBUG)
@@ -644,7 +620,7 @@ static int start_opencl_device(int sequential_id, int *err_type)
 	} while (ret_code != CL_SUCCESS);
 
 #ifdef OCL_DEBUG
-	fprintf(stderr, "  Device %d: %s\n", sequential_id, opencl_data);
+	fprintf(stderr, "  Device %d: %s\n", sequential_id + 1, opencl_data);
 #endif
 
 	// Success.
@@ -941,7 +917,7 @@ void opencl_load_environment(void)
 
 #ifdef HAVE_MPI
 		// Poor man's multi-device support.
-		if (mpi_p > 1 && mpi_p_local > 1) {
+		if (mpi_p > 1 && mpi_p_local != 1) {
 			// Pick device to use for this node
 			gpu_id = engaged_devices[mpi_id % get_number_of_devices_in_use()];
 
@@ -957,13 +933,13 @@ void opencl_load_environment(void)
 	}
 }
 
-/* Get the device preferred vector width */
+/*
+ * Get the device preferred vector width.  The --force-scalar option, or
+ * john.conf ForceScalar boolean, is taken care of in john.c and converted
+ * to "options.v_width = 1".
+ */
 unsigned int opencl_get_vector_width(int sequential_id, int size)
 {
-	/* --force-scalar option, or john.conf ForceScalar boolean */
-	if (options.flags & FLG_SCALAR)
-		options.v_width = 1;
-
 	/* --force-vector-width=N */
 	if (options.v_width) {
 		ocl_v_width = options.v_width;
@@ -1218,9 +1194,8 @@ void opencl_build(int sequential_id, const char *opts, int save, const char *fil
 		file_name = name;
 	}
 
-	*program =
-	    clCreateProgramWithSource(context[sequential_id], 1, srcptr,
-	                              NULL, &err_code);
+	uint64_t start = john_get_nano();
+	*program = clCreateProgramWithSource(context[sequential_id], 1, srcptr, NULL, &err_code);
 	HANDLE_CLERROR(err_code, "clCreateProgramWithSource");
 
 	build_opts = get_build_opts(sequential_id, opts);
@@ -1305,6 +1280,9 @@ void opencl_build(int sequential_id, const char *opts, int save, const char *fil
 	                                     (void *)build_log, NULL),
 	               "clGetProgramBuildInfo II");
 
+	uint64_t end = john_get_nano();
+	log_event("- build time: %ss", ns2string(end - start));
+
 	// Report build errors and warnings
 	if (build_code != CL_SUCCESS) {
 		// Give us info about error and exit (through HANDLE_CLERROR)
@@ -1381,22 +1359,25 @@ void opencl_build(int sequential_id, const char *opts, int save, const char *fil
 #endif /* HAVE_MPI */
 }
 
-void opencl_build_from_binary(int sequential_id, cl_program *program, const char *kernel_source, size_t program_size)
+cl_int opencl_build_from_binary(int sequential_id, cl_program *program, const char *kernel_source, size_t program_size)
 {
-	cl_int build_code, err_code;
+	cl_int build_code;
 	char *build_log;
 	const char *srcptr[] = { kernel_source };
 
-	build_log = (char *) mem_calloc(LOG_SIZE, sizeof(char));
-	*program =
-	    clCreateProgramWithBinary(context[sequential_id], 1,
-	                              &devices[sequential_id], &program_size,
-	                              (const unsigned char **)srcptr,
-	                              NULL, &err_code);
-	HANDLE_CLERROR(err_code, "clCreateProgramWithBinary (using cached binary - try clearing the cache)");
+	build_log = mem_calloc(LOG_SIZE, sizeof(char));
 
-	build_code = clBuildProgram(*program, 0,
-	                            NULL, NULL, NULL, NULL);
+	uint64_t start = john_get_nano();
+	*program = clCreateProgramWithBinary(context[sequential_id], 1,
+	                                     &devices[sequential_id], &program_size,
+	                                     (const unsigned char **)srcptr,
+	                                     NULL, &ret_code);
+	if (ret_code != CL_SUCCESS) {
+		MEM_FREE(build_log);
+		return ret_code;
+	}
+
+	build_code = (clBuildProgram(*program, 0, NULL, NULL, NULL, NULL));
 
 	HANDLE_CLERROR(clGetProgramBuildInfo(*program,
 	                                     devices[sequential_id],
@@ -1404,20 +1385,20 @@ void opencl_build_from_binary(int sequential_id, cl_program *program, const char
 	                                     (void *)build_log,
 	                                     NULL), "clGetProgramBuildInfo (using cached binary - try clearing the cache)");
 
-	// Report build errors and warnings
+	uint64_t end = john_get_nano();
+
+	// If it failed, don't show a log - we'll just rebuild without the cache
 	if (build_code != CL_SUCCESS) {
-		// Give us info about error and exit (through HANDLE_CLERROR)
-		if (strlen(build_log) > 1)
-			fprintf(stderr, "Binary build log: %s\n", build_log);
-		fprintf(stderr, "Error %d building kernel using cached binary - try clearing the cache."
-		        " DEVICE_INFO=%d\n", build_code, device_info[sequential_id]);
-		HANDLE_CLERROR(build_code, "clBuildProgram");
+		MEM_FREE(build_log);
+		return build_code;
 	}
 	// Nvidia may return a single '\n' that we ignore
 	else if (options.verbosity >= LOG_VERB && strlen(build_log) > 1)
 		fprintf(stderr, "Binary Build log: %s\n", build_log);
 
+	log_event("- build time: %ss", ns2string(end - start));
 	MEM_FREE(build_log);
+	return CL_SUCCESS;
 }
 
 // Do the proper test using different global work sizes.
@@ -1441,6 +1422,8 @@ static void clear_profiling_events()
 // salt, and fills binary pointer.
 static void* fill_opencl_device(size_t gws, void **binary)
 {
+	static int reported;
+	int len = mask_add_len;
 	int i;
 	size_t kpc = gws * ocl_v_width;
 	void *salt;
@@ -1449,7 +1432,6 @@ static void* fill_opencl_device(size_t gws, void **binary)
 	self->methods.clear_keys();
 	{
 		char key[PLAINTEXT_BUFFER_SIZE];
-		int len = mask_add_len;
 
 		if (mask_add_len == 0 ||
 		    options.req_minlength != -1 || options.req_maxlength != 0) {
@@ -1463,9 +1445,6 @@ static void* fill_opencl_device(size_t gws, void **binary)
 		// Obey format's min and max length
 		len = MAX(len, self->params.plaintext_min_length);
 		len = MIN(len, self->params.plaintext_length);
-
-		if (options.verbosity == VERB_DEBUG)
-			fprintf(stderr, "Tuning to length %d\n", len);
 
 		memset(key, 0x41, sizeof(key));
 		key[len] = 0;
@@ -1489,6 +1468,10 @@ static void* fill_opencl_device(size_t gws, void **binary)
 			s = s->next;
 		salt = s->salt;
 		*binary = s->list->binary;
+
+		if (options.verbosity >= VERB_MAX && !reported++)
+			fprintf(stderr, "Tuning for %s of %u and password length %d\n",
+			        db->format->params.tunable_cost_name[0], db->max_cost[0], len);
 	} else {
 		char *ciphertext;
 
@@ -1500,6 +1483,15 @@ static void* fill_opencl_device(size_t gws, void **binary)
 		*binary = self->methods.binary(ciphertext);
 		if (salt)
 			dyna_salt_create(salt);
+
+		if (options.verbosity >= VERB_MAX && !reported++) {
+			if (salt && self->methods.tunable_cost_value[0]) {
+				struct db_main *db = ocl_autotune_db;
+				fprintf(stderr, "Tuning for %s of %u and password length %d\n",
+				        db->format->params.tunable_cost_name[0], self->methods.tunable_cost_value[0](salt), len);
+			} else
+				fprintf(stderr, "Tuning for password length %d\n", len);
+		}
 	}
 	self->methods.set_salt(salt);
 
@@ -1510,13 +1502,12 @@ static void* fill_opencl_device(size_t gws, void **binary)
 // (or return zero for error or limits exceeded)
 static cl_ulong gws_test(size_t gws, unsigned int rounds, int sequential_id)
 {
-	cl_ulong startTime, endTime, runtime = 0, looptime = 0;
+	cl_ulong submitTime, startTime, endTime, runtime = 0, looptime = 0;
 	int i, count, total = 0;
 	size_t kpc = gws * ocl_v_width;
 	cl_event benchEvent[MAX_EVENTS];
 	int result, number_of_events = 0;
 	void *salt, *binary;
-	int amd_bug;
 
 	for (i = 0; i < MAX_EVENTS; i++)
 		benchEvent[i] = NULL;
@@ -1569,10 +1560,19 @@ static cl_ulong gws_test(size_t gws, unsigned int rounds, int sequential_id)
 	for (i = 0; i < number_of_events; i++) {
 		char mult[32] = "";
 
-		amd_bug = 0;
+		int prof_bug = 0;
 
-		HANDLE_CLERROR(clWaitForEvents(1, multi_profilingEvent[i]),
-		               "clWaitForEvents");
+		if (clWaitForEvents(1, multi_profilingEvent[i]) != CL_SUCCESS) {
+			if (options.verbosity > VERB_LEGACY)
+				fprintf(stderr, "Profiling errors; Skipping results\n");
+			return 0;
+		}
+
+		HANDLE_CLERROR(clGetEventProfilingInfo(*multi_profilingEvent[i],
+		                                       CL_PROFILING_COMMAND_SUBMIT,
+		                                       sizeof(cl_ulong), &submitTime,
+		                                       NULL),
+		               "clGetEventProfilingInfo submit");
 		HANDLE_CLERROR(clGetEventProfilingInfo(*multi_profilingEvent[i],
 		                                       CL_PROFILING_COMMAND_START,
 		                                       sizeof(cl_ulong), &startTime,
@@ -1584,16 +1584,14 @@ static cl_ulong gws_test(size_t gws, unsigned int rounds, int sequential_id)
 		                                       NULL),
 		               "clGetEventProfilingInfo end");
 
-		/* Work around AMD bug. It randomly claims that a kernel
-		   run took less than a microsecond, fooling our auto tune */
-		if (endTime - startTime < 1000) {
-			amd_bug = 1;
+		/*
+		 * Work around driver bugs. Problems seen with old AMD and Apple M1.
+		 * If startTime looks b0rken we use submitTime instead
+		 */
+		if (i == main_opencl_event && (endTime - submitTime) > 10 * (endTime - startTime)) {
+			prof_bug = 1;
 
-			HANDLE_CLERROR(clGetEventProfilingInfo(*multi_profilingEvent[i],
-			                                       CL_PROFILING_COMMAND_SUBMIT,
-			                                       sizeof(cl_ulong), &startTime,
-			                                       NULL),
-			               "clGetEventProfilingInfo submit");
+			startTime = submitTime;
 		}
 
 		/* Work around OSX bug with HD4000 driver */
@@ -1611,8 +1609,8 @@ static cl_ulong gws_test(size_t gws, unsigned int rounds, int sequential_id)
 			runtime += (endTime - startTime);
 
 		if (options.verbosity >= VERB_MAX)
-			fprintf(stderr, "%s%s%s%s", warnings[i], mult,
-			        ns2string(endTime - startTime), (amd_bug) ? "*" : "");
+			fprintf(stderr, "%s%s%ss%s", warnings[i], mult,
+			        ns2string(endTime - startTime), (prof_bug) ? "*" : "");
 
 		/* Single-invocation duration limit */
 		if (duration_time &&
@@ -1620,7 +1618,7 @@ static cl_ulong gws_test(size_t gws, unsigned int rounds, int sequential_id)
 			runtime = looptime = 0;
 
 			if (options.verbosity >= VERB_MAX)
-				fprintf(stderr, " (exceeds %s)", ms2string(duration_time));
+				fprintf(stderr, " (exceeds %ss)", ms2string(duration_time));
 			break;
 		}
 	}
@@ -1663,16 +1661,12 @@ void opencl_init_auto_setup(int p_default_value, int p_hash_loops,
 	ocl_autotune_db = db;
 	autotune_real_db = db && db->real && db->real == db;
 	autotune_salts = db ? db->salts : NULL;
+
+	/* We can't process more than 4G keys per crypt() */
+	if (mask_int_cand.num_int_cand > 1)
+		gws_limit = MIN(gws_limit, 0x100000000ULL / mask_int_cand.num_int_cand / ocl_v_width);
 }
 
-/*
- * Since opencl_find_best_gws() needs more event control (even more events) to
- * work properly, opencl_find_best_workgroup() cannot be used by formats that
- * are using it.  Therefore, despite the fact that opencl_find_best_lws() does
- * almost the same that opencl_find_best_workgroup() can do, it also handles
- * the necessary event(s) and can do a proper crypt_all() execution analysis
- * when shared GWS detection is used.
- */
 void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
                           cl_kernel crypt_kernel)
 {
@@ -1680,8 +1674,8 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 	cl_int ret_code;
 	int i, j, numloops, count, result;
 	size_t my_work_group, optimal_work_group;
-	size_t max_group_size, wg_multiple, sumStartTime, sumEndTime;
-	cl_ulong startTime, endTime, kernelExecTimeNs = CL_ULONG_MAX;
+	size_t max_group_size, wg_multiple, sumRunTime;
+	cl_ulong submitTime, startTime, endTime, kernelExecTimeNs = CL_ULONG_MAX;
 	cl_event benchEvent[MAX_EVENTS];
 	void *salt, *binary;
 
@@ -1749,23 +1743,55 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 
 	// Timing run
 	count = global_work_size * ocl_v_width;
+	uint64_t wc_start = john_get_nano();
 	result = self->methods.crypt_all(&count, autotune_salts);
 	if (result > 0)
 		self->methods.cmp_all(binary, result);
+	uint64_t wc_end = john_get_nano();
 
-	HANDLE_CLERROR(clWaitForEvents(1, &benchEvent[main_opencl_event]),
-	               "clWaitForEvents");
-	HANDLE_CLERROR(clFinish(queue[sequential_id]), "clFinish");
-	HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent[main_opencl_event],
-	                                       CL_PROFILING_COMMAND_START,
-	                                       sizeof(cl_ulong),
-	                                       &startTime, NULL),
-	               "clGetEventProfilingInfo start");
+	if ((clWaitForEvents(1, &benchEvent[main_opencl_event]) != CL_SUCCESS) ||
+	    (clFinish(queue[sequential_id]) != CL_SUCCESS)) {
+		if (options.verbosity > VERB_LEGACY)
+			fprintf(stderr, "Profiling errors; Using wall-clock time instead\n");
+		startTime = wc_start;
+		endTime = wc_end;
+	} else {
+		HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent[main_opencl_event],
+		                                       CL_PROFILING_COMMAND_SUBMIT,
+		                                       sizeof(cl_ulong), &submitTime, NULL),
+		               "clGetEventProfilingInfo submit");
+		HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent[main_opencl_event],
+		                                       CL_PROFILING_COMMAND_START,
+		                                       sizeof(cl_ulong), &startTime, NULL),
+		               "clGetEventProfilingInfo start");
+		HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent[main_opencl_event],
+		                                       CL_PROFILING_COMMAND_END,
+		                                       sizeof(cl_ulong), &endTime, NULL),
+		               "clGetEventProfilingInfo end");
 
-	HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent[main_opencl_event],
-	                                       CL_PROFILING_COMMAND_END,
-	                                       sizeof(cl_ulong), &endTime, NULL),
-	               "clGetEventProfilingInfo end");
+		/*
+		 * Work around driver bugs. Problems seen with old AMD and Apple M1.
+		 * If startTime looks b0rken we use submitTime instead
+		 */
+		if ((endTime - submitTime) > 10 * (endTime - startTime)) {
+			if (options.verbosity > VERB_LEGACY)
+				fprintf(stderr, "Note: Profiling timers seem buggy\n");
+			startTime = submitTime;
+		}
+
+		/*
+		 * For numloops enumeration, we even double-check with wall clock time
+		 * and if it drastically differs from the profile timer, use the former
+		 * so we don't end up with a huge numloops where inappropriate.
+		 */
+		if ((wc_end - wc_start) > 10 * (endTime - startTime)) {
+			if (options.verbosity > VERB_LEGACY)
+				fprintf(stderr, "Note: Profiling timers seem to be way off\n");
+			startTime = wc_start;
+			endTime = wc_end;
+		}
+	}
+
 	cl_ulong roundup = endTime - startTime - 1;
 	numloops = (int)(size_t)((200000000ULL + roundup) / (endTime - startTime));
 
@@ -1791,8 +1817,7 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 			fprintf(stderr, "Testing LWS=" Zu " GWS=" Zu " ...", my_work_group,
 			        global_work_size);
 
-		sumStartTime = 0;
-		sumEndTime = 0;
+		sumRunTime = 0;
 
 		for (i = 0; i < numloops; i++) {
 			advance_cursor();
@@ -1814,9 +1839,18 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 				break;
 			}
 
-			HANDLE_CLERROR(clWaitForEvents(1, &benchEvent[main_opencl_event]),
-			               "clWaitForEvents");
-			HANDLE_CLERROR(clFinish(queue[sequential_id]), "clFinish");
+			if ((clWaitForEvents(1, &benchEvent[main_opencl_event]) != CL_SUCCESS) ||
+			    (clFinish(queue[sequential_id]) != CL_SUCCESS)) {
+				if (options.verbosity > VERB_LEGACY)
+					fprintf(stderr, "Profiling errors; Skipping results\n");
+				startTime = endTime = 0;
+				break;
+			}
+
+			HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent
+				[main_opencl_event], CL_PROFILING_COMMAND_SUBMIT,
+				sizeof(cl_ulong), &submitTime, NULL),
+			               "clGetEventProfilingInfo submit");
 			HANDLE_CLERROR(clGetEventProfilingInfo(benchEvent
 				[main_opencl_event], CL_PROFILING_COMMAND_START,
 				sizeof(cl_ulong), &startTime, NULL),
@@ -1826,10 +1860,15 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 				sizeof(cl_ulong), &endTime, NULL),
 			               "clGetEventProfilingInfo end");
 
-			sumStartTime += startTime;
-			sumEndTime += endTime;
+			/*
+			 * Work around driver bugs. Problems seen with old AMD and Apple M1.
+			 * If startTime looks b0rken we use submitTime instead
+			 */
+			if ((endTime - submitTime) > 10 * (endTime - startTime))
+				startTime = submitTime;
 
 			clear_profiling_events();
+			sumRunTime += endTime - startTime;
 		}
 
 		/* Erase the 'spinning wheel' cursor */
@@ -1839,11 +1878,13 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 		if (!endTime)
 			break;
 		if (options.verbosity > VERB_LEGACY)
-			fprintf(stderr, " %s%s\n", ns2string(sumEndTime - sumStartTime),
-			    ((double)(sumEndTime - sumStartTime) / kernelExecTimeNs < 0.997)
+			fprintf(stderr, " %ss%s\n", ns2string(sumRunTime),
+			    ((double)(sumRunTime) / kernelExecTimeNs < 0.997)
 			        ? "+" : "");
-		if ((double)(sumEndTime - sumStartTime) / kernelExecTimeNs < 0.997) {
-			kernelExecTimeNs = sumEndTime - sumStartTime;
+		if (sumRunTime > 2 * kernelExecTimeNs)
+			break;
+		if ((double)(sumRunTime) / kernelExecTimeNs < 0.997) {
+			kernelExecTimeNs = sumRunTime;
 			optimal_work_group = my_work_group;
 		} else {
 			if (my_work_group >= 256 ||
@@ -1874,35 +1915,6 @@ void opencl_find_best_lws(size_t group_size_limit, int sequential_id,
 
 	if (!self->methods.tunable_cost_value[0] || !ocl_autotune_db->real)
 		dyna_salt_remove(salt);
-}
-
-static char *human_speed(unsigned long long int speed)
-{
-	static char out[32];
-	char p = '\0';
-
-	if (speed > 1000000) {
-		speed /= 1000;
-		p = 'K';
-	}
-	if (speed > 1000000) {
-		speed /= 1000;
-		p = 'M';
-	}
-	if (speed > 1000000) {
-		speed /= 1000;
-		p = 'G';
-	}
-	if (speed > 1000000) {
-		speed /= 1000;
-		p = 'T'; /* you wish */
-	}
-	if (p)
-		snprintf(out, sizeof(out), "%llu%cc/s", speed, p);
-	else
-		snprintf(out, sizeof(out), "%lluc/s", speed);
-
-	return out;
 }
 
 uint32_t get_bitmap_size_bits(uint32_t num_elements, int sequential_id)
@@ -1965,10 +1977,10 @@ void opencl_find_best_gws(int step, int max_duration,
 
 	if (have_lws) {
 		if (core_count > 2)
-			optimal_gws = lcm(core_count, optimal_gws);
+			optimal_gws = MIN(gws_limit, lcm(core_count, optimal_gws));
 		default_value = optimal_gws;
 	} else {
-		soft_limit = local_work_size * core_count * 128;
+		soft_limit = MIN(gws_limit, local_work_size * core_count * 128);
 	}
 
 	/* conf setting may override (decrease) code's max duration */
@@ -1985,7 +1997,7 @@ void opencl_find_best_gws(int step, int max_duration,
 	}
 	if (options.verbosity > VERB_LEGACY) {
 		fprintf(stderr, "Calculating best GWS for LWS="Zu"; "
-		        "max. %s single kernel invocation.\n",
+		        "max. %ss single kernel invocation.\n",
 		        local_work_size, ms2string(duration_time));
 	}
 
@@ -2014,7 +2026,7 @@ void opencl_find_best_gws(int step, int max_duration,
 				optimal_gws = num;
 
 			if (options.verbosity >= VERB_MAX)
-				fprintf(stderr, "Hardware resources exhausted\n");
+				fprintf(stderr, "Hardware resources exhausted for GWS=%zu\n", num);
 			break;
 		}
 
@@ -2028,8 +2040,7 @@ void opencl_find_best_gws(int step, int max_duration,
 		speed = rounds * raw_speed;
 
 		if (options.verbosity > VERB_LEGACY)
-			fprintf(stderr, "gws: %9zu\t%10s%12llu "
-			        "rounds/s%10s per crypt_all()",
+			fprintf(stderr, "gws: %9zu%13s%12llu rounds/s%11ss per crypt_all()",
 			        num, human_speed(raw_speed), speed, ns2string(run_time));
 
 		/*
@@ -2064,8 +2075,7 @@ void opencl_find_best_gws(int step, int max_duration,
 		speed = rounds * raw_speed;
 
 		if (options.verbosity > VERB_LEGACY)
-			fprintf(stderr, "gws: %9zu\t%10s%12llu "
-			        "rounds/s%10s per crypt_all()",
+			fprintf(stderr, "gws: %9zu%13s%12llu rounds/s%11ss per crypt_all()",
 			        num, human_speed(raw_speed), speed, ns2string(run_time));
 
 		if (speed < best_speed) {
@@ -2146,8 +2156,7 @@ static void load_device_info(int sequential_id)
 		device_info[sequential_id] +=
 		    (major == 3 && minor == 5 ? DEV_NV_C35 : 0);
 		device_info[sequential_id] += (major == 5 ? DEV_NV_MAXWELL : 0);
-		device_info[sequential_id] += (major == 6 ? DEV_NV_PASCAL : 0);
-		device_info[sequential_id] += (major == 7 ? DEV_NV_VOLTA : 0);
+		device_info[sequential_id] += (major >= 5 ? DEV_NV_MAXWELL_PLUS : 0);
 	}
 }
 
@@ -2224,113 +2233,113 @@ void opencl_build_kernel_opt(const char *kernel_filename, int sequential_id,
 	MEM_FREE(kernel_source);
 }
 
-#define md5add(string) MD5_Update(&ctx, (string), strlen(string))
+#define md4add(string) MD4_Update(&ctx, (string), strlen(string))
 
 void opencl_build_kernel(const char *kernel_filename, int sequential_id, const char *opts,
                          int warn)
 {
+	struct stat source_stat, bin_stat;
+	char dev_name[512], bin_name[512];
+	const char *tmp_name;
+	unsigned char hash[16];
+	char hash_str[33];
+	int i, use_cache;
+	MD4_CTX ctx;
+	char *kernel_source = NULL;
+	const char *global_opts;
+
 #if HAVE_MPI
 	static int once;
 #endif
 
-	/*
-	 * Disable binary caching for:
-	 * - nvidia unless on macOS
-	 * - CPU if on macOS
-	 */
-	if ((gpu_nvidia(device_info[sequential_id]) && !platform_apple(get_platform_id(sequential_id))) ||
-	    (cpu(device_info[sequential_id]) && platform_apple(get_platform_id(sequential_id)))) {
-		if (john_main_process || !cfg_get_bool(SECTION_OPTIONS, SUBSECTION_MPI, "MPIAllGPUsSame", 0))
-			log_event("- Kernel binary caching disabled for this platform/device");
-		opencl_build_kernel_opt(kernel_filename, sequential_id, opts);
-	} else {
-		struct stat source_stat, bin_stat;
-		char dev_name[512], bin_name[512];
-		const char *tmp_name;
-		unsigned char hash[16];
-		char hash_str[33];
-		uint64_t startTime, runtime;
-		int i;
-		MD5_CTX ctx;
-		char *kernel_source = NULL;
-		const char *global_opts;
+	if (!(global_opts = getenv("OPENCLBUILDOPTIONS")) &&
+	    !(global_opts = cfg_get_param(SECTION_OPTIONS, SUBSECTION_OPENCL, "GlobalBuildOpts")))
+		global_opts = OPENCLBUILDOPTIONS;
 
-		if (!(global_opts = getenv("OPENCLBUILDOPTIONS")))
-			if (!(global_opts = cfg_get_param(SECTION_OPTIONS,
-			    SUBSECTION_OPENCL, "GlobalBuildOpts")))
-				global_opts = OPENCLBUILDOPTIONS;
-
-		startTime = (unsigned long)time(NULL);
-
-		// Get device name.
-		HANDLE_CLERROR(clGetDeviceInfo(devices[sequential_id],
-		                               CL_DEVICE_NAME, sizeof(dev_name),
-		                               dev_name, NULL),
-		               "clGetDeviceInfo for DEVICE_NAME");
+	// Get device name.
+	HANDLE_CLERROR(clGetDeviceInfo(devices[sequential_id],
+	                               CL_DEVICE_NAME, sizeof(dev_name),
+	                               dev_name, NULL),
+	               "clGetDeviceInfo for DEVICE_NAME");
 
 /*
  * Create a hash of kernel source and parameters, and use as cache name.
  */
-		MD5_Init(&ctx);
-		md5add(kernel_filename);
-		opencl_read_source(kernel_filename, &kernel_source);
-		md5add(kernel_source);
-		md5add(global_opts);
-		if (opts)
-			md5add(opts);
-		md5add(opencl_driver_ver(sequential_id));
-		md5add(dev_name);
-		MD5_Update(&ctx, (char*)&platform_id, sizeof(platform_id));
-		MD5_Final(hash, &ctx);
+	MD4_Init(&ctx);
+	md4add(kernel_filename);
+	opencl_read_source(kernel_filename, &kernel_source);
+	md4add(kernel_source);
+	md4add(global_opts);
+	if (opts)
+		md4add(opts);
+	md4add(opencl_driver_ver(sequential_id));
+	md4add(dev_name);
+	MD4_Update(&ctx, (char*)&platform_id, sizeof(platform_id));
+	MD4_Final(hash, &ctx);
 
-		for (i = 0; i < 16; i++) {
-			hash_str[2 * i + 0] = itoa16[hash[i] >> 4];
-			hash_str[2 * i + 1] = itoa16[hash[i] & 0xf];
-		}
-		hash_str[32] = 0;
+	for (i = 0; i < 16; i++) {
+		hash_str[2 * i + 0] = itoa16[hash[i] >> 4];
+		hash_str[2 * i + 1] = itoa16[hash[i] & 0xf];
+	}
+	hash_str[32] = 0;
 
 #if JOHN_SYSTEMWIDE
-		tmp_name = replace_str(kernel_filename, "$JOHN", JOHN_PRIVATE_HOME);
+	tmp_name = replace_str(kernel_filename, "$JOHN", JOHN_PRIVATE_HOME);
 #else
-		tmp_name = kernel_filename;
+	tmp_name = kernel_filename;
 #endif
-		snprintf(bin_name, sizeof(bin_name), "%s_%s.bin",
-		         tmp_name, hash_str);
+	snprintf(bin_name, sizeof(bin_name), "%s_%s.bin", tmp_name, hash_str);
 
-		// Select the kernel to run.
-		if (!getenv("DUMP_BINARY") &&
-		    !stat(path_expand(kernel_filename), &source_stat) &&
-		    !stat(path_expand(bin_name), &bin_stat) &&
-			(source_stat.st_mtime < bin_stat.st_mtime)) {
-			size_t program_size = opencl_read_source(bin_name, &kernel_source);
-			log_event("- Building kernel from cached binary");
-			opencl_build_from_binary(sequential_id, &program[sequential_id], kernel_source, program_size);
-		} else {
-			log_event("- Building kernel and caching binary");
-			if (warn && options.verbosity > VERB_DEFAULT) {
-				fprintf(stderr, "Building the kernel, this "
-				        "could take a while\n");
-				fflush(stdout);
-			}
-			opencl_read_source(kernel_filename, &kernel_source);
-			opencl_build(sequential_id, opts, 1, bin_name, &program[sequential_id], kernel_filename, kernel_source);
-		}
-		if (warn && options.verbosity > VERB_DEFAULT) {
-			if ((runtime = (unsigned long)(time(NULL) - startTime))
-			        > 2UL)
-				fprintf(stderr, "Build time: %lu seconds\n",
-				        (unsigned long)runtime);
-			fflush(stdout);
-		}
+#if 1
+	/*
+	 * Disable binary caching for nvidia, they have their own in ~/.nv/ComputeCache
+	 */
+	if (gpu_nvidia(device_info[sequential_id]) && !platform_apple(get_platform_id(sequential_id))) {
+		if (john_main_process || !cfg_get_bool(SECTION_OPTIONS, SUBSECTION_MPI, "MPIAllGPUsSame", 0))
+			log_event("- Kernel binary caching disabled for this platform/device");
+		use_cache = 0;
+	} else
+#endif
+	if (getenv("DUMP_BINARY")) {
+		log_event("- DUMP_BINARY is set, ignoring cached kernel");
+		use_cache = 0;
+	} else {
+		use_cache = !stat(path_expand(bin_name), &bin_stat);
 
-		MEM_FREE(kernel_source);
+		if (use_cache && !stat(path_expand(kernel_filename), &source_stat) &&
+		    source_stat.st_mtime > bin_stat.st_mtime) {
+			use_cache = 0;
+			log_event("- cached kernel may be stale, ignoring");
+		}
 	}
+
+	// Select the kernel to run.
+	if (use_cache) {
+		size_t program_size = opencl_read_source(bin_name, &kernel_source);
+
+		log_event("- Building kernel from cached binary");
+		ret_code = opencl_build_from_binary(sequential_id, &program[sequential_id], kernel_source, program_size);
+		if (ret_code != CL_SUCCESS)
+			log_event("- Build from cached binary failed");
+	}
+
+	if (!use_cache || ret_code != CL_SUCCESS) {
+		log_event("- Building kernel from source and caching binary");
+		if (warn && options.verbosity > VERB_DEFAULT) {
+			fflush(stdout);
+			fprintf(stderr, "Building the kernel, this could take a while\n");
+		}
+		opencl_read_source(kernel_filename, &kernel_source);
+		opencl_build(sequential_id, opts, 1, bin_name, &program[sequential_id], kernel_filename, kernel_source);
+	}
+
+	MEM_FREE(kernel_source);
+
 #if HAVE_MPI
 	if (mpi_p > 1 && !once++) {
 #if RACE_CONDITION_DEBUG || MPI_DEBUG
 		if (options.verbosity == VERB_DEBUG)
-			fprintf(stderr, "Node %d reached %s() MPI build barrier\n",
-			        NODE, __FUNCTION__);
+			fprintf(stderr, "Node %d reached %s() MPI build barrier\n", NODE, __FUNCTION__);
 #endif
 		MPI_Barrier(MPI_COMM_WORLD);
 		if (mpi_id == 0 && options.verbosity >= VERB_DEFAULT)
@@ -2375,6 +2384,21 @@ int opencl_prepare_dev(int sequential_id)
 	else
 		ocl_always_show_ws = cfg_get_bool(SECTION_OPTIONS, SUBSECTION_OPENCL,
 		                                  "AlwaysShowWorksizes", 0);
+
+#ifndef __APPLE__
+	if (gpu_nvidia(device_info[sequential_id])) {
+		opencl_avoid_busy_wait[sequential_id] = cfg_get_bool(SECTION_OPTIONS, SUBSECTION_GPU,
+		                                                     "AvoidBusyWait", 1);
+		static int warned;
+
+		/* Remove next line once (nearly) all formats has got the macros */
+		if (!opencl_avoid_busy_wait[sequential_id])
+		if (!warned) {
+			warned = 1;
+			log_event("- Busy-wait reduction %sabled", opencl_avoid_busy_wait[sequential_id] ? "en" : "dis");
+		}
+	}
+#endif
 
 	return sequential_id;
 }
@@ -2494,6 +2518,47 @@ void get_compute_capability(int sequential_id, unsigned int *major,
 	clGetDeviceInfo(devices[sequential_id],
 	                CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV,
 	                sizeof(cl_uint), minor, NULL);
+
+	if (!major) {
+/*
+ * Apple, VCL and some other environments don't expose CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV
+ * so we need this crap - which is incomplete, best effort matching.
+ * http://en.wikipedia.org/wiki/Comparison_of_Nvidia_graphics_processing_units
+ */
+		char dname[MAX_OCLINFO_STRING_LEN];
+
+		HANDLE_CLERROR(clGetDeviceInfo(devices[sequential_id],
+		                               CL_DEVICE_NAME,
+		                               sizeof(dname), dname, NULL),
+		               "clGetDeviceInfo for CL_DEVICE_NAME");
+
+		// Ampere 8.0
+		if ((strstr(dname, "RTX 30") ||
+		           (strstr(dname, "RTX A") && (dname[5] >= '1' && dname[5] <= '9')) ||
+		     (dname[0] == 'A' && dname[1] >= '1' && dname[1] <= '9')))
+			*major = 8;
+		// Volta 7.0, Turing 7.5
+		else if (strstr(dname, "TITAN V") || strstr(dname, "RTX 20")) {
+			*major = 7;
+			if (strstr(dname, "RTX 20"))
+				*minor = 5;
+		}
+		// Pascal 6.x
+		else if (strstr(dname, "GT 10") || strstr(dname, "GTX 10") || strcasestr(dname, "TITAN Xp"))
+			*major = 6;
+		// Maxwell 5.x
+		else if (strstr(dname, "GT 9") || strstr(dname, "GTX 9") || strstr(dname, "GTX TITAN X"))
+			*major = 5;
+		// Kepler 3.x
+		else if (strstr(dname, "GT 6") || strstr(dname, "GTX 6") ||
+		         strstr(dname, "GT 7") || strstr(dname, "GTX 7") ||
+		         strstr(dname, "GT 8") || strstr(dname, "GTX 8") ||
+		         strstr(dname, "GTX TITAN"))
+			*major = 3;
+		// Fermi 2.0
+		else if (strstr(dname, "GT 5") || strstr(dname, "GTX 5"))
+			*major = 2;
+	}
 }
 
 cl_uint get_processors_count(int sequential_id)
@@ -2524,44 +2589,21 @@ cl_uint get_processors_count(int sequential_id)
 			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 128);
 		else if (major == 6)    // 6.x Pascal
 			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 128);
-		else if (major >= 7)    // 7.x Volta, 8.x Turing?
+		else if (major >= 7)    // 7.0 Volta, 7.5 Turing, 8.x Ampere
 			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 64);
-/*
- * Apple, VCL and some other environments don't expose get_compute_capability()
- * so we need this crap - which is incomplete.
- * http://en.wikipedia.org/wiki/Comparison_of_Nvidia_graphics_processing_units
- *
- * This will produce a *guessed* figure
- */
-
-		// Volta or Turing
-		else if (strstr(dname, "TITAN V") || strstr(dname, "RTX 2"))
-			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 64);
-		// Pascal
-		else if (strstr(dname, "GTX 10"))
-			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 128);
-		// Maxwell
-		else if (strstr(dname, "GTX 9") || strstr(dname, "GTX TITAN X"))
-			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 128);
-		// Kepler
-		else if (strstr(dname, "GT 6") || strstr(dname, "GTX 6") ||
-		         strstr(dname, "GT 7") || strstr(dname, "GTX 7") ||
-		         strstr(dname, "GT 8") || strstr(dname, "GTX 8") ||
-		         strstr(dname, "GTX TITAN"))
-			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 192);
-		// Fermi
-		else if (strstr(dname, "GT 5") || strstr(dname, "GTX 5"))
-			core_count *= (ocl_device_list[sequential_id].cores_per_MP = 48);
 	} else if (gpu_intel(device_info[sequential_id])) {
 		// It seems all current models are x 8
 		core_count *= ocl_device_list[sequential_id].cores_per_MP = 8;
+	} else if (!strcmp(dname, "Apple M1")) {
+		// Each GPU core is split into 16 Execution Units, which each contain eight Arithmetic Logic Units (ALUs)
+		core_count *= ocl_device_list[sequential_id].cores_per_MP = 16 * 8;
 	} else if (gpu_amd(device_info[sequential_id])) {
 		// 16 thread proc * 5 SP
 		core_count *= (ocl_device_list[sequential_id].cores_per_MP = (16 *
 		               ((amd_gcn(device_info[sequential_id]) ||
 		                 amd_vliw4(device_info[sequential_id])) ? 4 : 5)));
 	} else {
-		// Nothing else known, we use half native vector width for long
+		// Nothing else known, we use the native vector width for long.
 		cl_uint v_width;
 
 		HANDLE_CLERROR(clGetDeviceInfo(devices[sequential_id],
@@ -3073,9 +3115,8 @@ void opencl_list_devices(void)
 
 			long_entries = get_processors_count(sequence_nr);
 			if (!cpu && ocl_device_list[sequence_nr].cores_per_MP > 1)
-				printf("    %s      "LLu" "
-				       " (%d x %d)\n",
-					gpu_nvidia(device_info[sequence_nr]) ? "CUDA cores:       " : "Stream processors:",
+				printf("    %s      "LLu"  (%d x %d)\n",
+					gpu_nvidia(device_info[sequence_nr]) ? "CUDA INT32 cores: " : "Stream processors:",
 				       (unsigned long long)long_entries,
 				       entries, ocl_device_list[sequence_nr].cores_per_MP);
 			printf("    Speed index:            %u\n",

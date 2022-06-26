@@ -1,3 +1,10 @@
+/*
+ * This software is Copyright (c) 2011-2018 Jim Fougeron,
+ * Copyright (c) 2013-2021 magnum,
+ * and it is hereby released to the general public under the following terms:
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted.
+ */
 #ifndef PKZIP_H
 #define PKZIP_H
 
@@ -38,6 +45,7 @@ typedef struct zip_magic_signatures_t {
 
 typedef struct zip_hash_type_t {
 	u8 *h;						// at getsalt time, we leave these null.  Later in setsalt, we 'fix' them
+	u8 type;					// JtR hash version. Version 2 ($pkzip2$) is now the deprecated one.
 	u16 c;
 	u16 c2;
 	u64 datlen;
@@ -48,6 +56,18 @@ typedef struct zip_hash_type_t {
 	ZIP_SIGS *pSig;
 #endif
 } ZIP_HASH;
+
+typedef struct winzip_salt_t {
+	dyna_salt dsalt;
+	uint64_t comp_len;
+	struct {
+		uint16_t type : 4;
+		uint16_t mode : 4;
+	} v;
+	unsigned char passverify[2];
+	unsigned char salt[SALT_LENGTH(3)];
+	unsigned char datablob[1];
+} winzip_salt;
 
 typedef struct zip_salt_t {
 	dyna_salt dsalt;
@@ -76,7 +96,7 @@ typedef union MY_WORD {
 
 /* Here is the 'common' code */
 #define WINZIP_BENCHMARK_COMMENT	""
-#define WINZIP_BENCHMARK_LENGTH	0x107
+#define WINZIP_BENCHMARK_LENGTH	0x507
 #define WINZIP_BINARY_SIZE         10
 #define WINZIP_FORMAT_TAG		"$zip2$"
 #define WINZIP_FORMAT_CLOSE_TAG	"$/zip2$"
@@ -85,6 +105,7 @@ typedef union MY_WORD {
 extern int winzip_common_valid(char *ciphertext, struct fmt_main *self);
 extern char *winzip_common_split(char *ciphertext, int index, struct fmt_main *self);
 extern void *winzip_common_binary(char *ciphertext);
+extern void *winzip_common_get_salt(char *ciphertext);
 
 extern struct fmt_tests winzip_common_tests[];
 

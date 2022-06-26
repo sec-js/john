@@ -10,6 +10,12 @@
  * Special thanks goes to Christopher Gurnee for making this work possible.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #include "arch.h"
 #if !AC_BUILT
 #define HAVE_LIBZ 1
@@ -134,7 +140,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	if (strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH) != 0)
 		return 0;
 
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 
 	ctcopy += TAG_LENGTH;
@@ -166,9 +172,11 @@ static int valid(char *ciphertext, struct fmt_main *self)
 			goto err;
 		if ((p = strtokm(NULL, "*")) == NULL) // data
 			goto err;
-		if (hexlenl(p, &extra) > 32 * 2 || extra)
+		if (hexlenl(p, &extra) != 32 * 2 || extra)
 			goto err;
 	}
+	if (strtokm(NULL, "*")) // no more fields
+		goto err;
 
 	MEM_FREE(keeptr);
 	return 1;
@@ -181,7 +189,7 @@ err:
 static void *get_salt(char *ciphertext)
 {
 	static struct custom_salt cs;
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	char *p;
 	int i;
@@ -513,3 +521,4 @@ struct fmt_main fmt_electrum = {
 #endif
 
 #endif /* HAVE_LIBZ */
+#endif /* HAVE_LIBCRYPTO */

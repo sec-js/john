@@ -53,7 +53,7 @@ john_register_one(&fmt_qnx);
 #ifdef SIMD_COEF_32
 #define ALGORITHM_NAME          SHA256_ALGORITHM_NAME
 #else
-#define ALGORITHM_NAME          "32/" ARCH_BITS_STR SHA2_LIB
+#define ALGORITHM_NAME          "32/" ARCH_BITS_STR
 #endif
 
 #define PLAINTEXT_LENGTH	48
@@ -263,7 +263,7 @@ static void set_salt(void *salt)
 static void *get_salt(char *ciphertext)
 {
 	static struct qnx_saltstruct out;
-	char *origptr = strdup(ciphertext), *ct = origptr;
+	char *origptr = xstrdup(ciphertext), *ct = origptr;
 
 	memset(&out, 0, sizeof(out));
 	ct = strtokm(&ct[1], "@");

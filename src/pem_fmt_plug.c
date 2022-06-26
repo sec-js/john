@@ -12,6 +12,12 @@
  * possible.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_pem;
 #elif FMT_REGISTERS_H
@@ -163,7 +169,7 @@ struct fmt_main fmt_pem = {
 		FMT_CASE | FMT_8_BIT | FMT_OMP | FMT_HUGE_INPUT,
 		{
 			"iteration count",
-			"cipher [1=3DES, 2/3/4=AES-128/192/256]",
+			"cipher [1=3DES 2/3/4=AES-128/192/256]",
 		},
 		{ FORMAT_TAG },
 		pem_tests
@@ -201,3 +207,4 @@ struct fmt_main fmt_pem = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

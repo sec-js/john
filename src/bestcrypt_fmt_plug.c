@@ -29,7 +29,7 @@ john_register_one(&fmt_bestcrypt);
 
 #define OMP_SCALE               1 // this is a slow format
 
-#include "sha.h"
+#include "sha2.h"
 #include "loader.h"
 #include "pkcs12.h"
 #include "aes.h"
@@ -154,7 +154,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 
 	if (strncmp(ciphertext, FORMAT_TAG, FORMAT_TAG_LENGTH))
 		return 0;
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += FORMAT_TAG_LENGTH;
 	if ((p = strtokm(ctcopy, "$")) == NULL) // version
@@ -237,7 +237,7 @@ static void *get_salt(char *ciphertext)
 	char *p = ciphertext, *ctcopy, *keeptr;
 	memset(&cs, 0, sizeof(cs));
 
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += FORMAT_TAG_LENGTH;
 	p = strtokm(ctcopy, "$");
@@ -257,12 +257,12 @@ static void *get_salt(char *ciphertext)
 	p = strtokm(NULL, "$");
 	cs.salt_size = atoi(p);
 	p = strtokm(NULL, "$");
-	for (i = 0; i < cs.salt_size; i++)
+	for (i = 0; i < cs.salt_size && p[2*i]; i++)
 		cs.salt[i] = (atoi16[ARCH_INDEX(p[2*i])] << 4) | atoi16[ARCH_INDEX(p[2*i+1])];
 	p = strtokm(NULL, "$");
 	cs.active_slots = atoi(p);
 	p = strtokm(NULL, "$");
-	for (i = 0; i < cs.active_slots * kKeySlotSize; i++)
+	for (i = 0; i < cs.active_slots * kKeySlotSize && p[2*i]; i++)
 		cs.key[i] = (atoi16[ARCH_INDEX(p[2*i])] << 4) | atoi16[ARCH_INDEX(p[2*i+1])];
 
 	MEM_FREE(keeptr);
@@ -449,7 +449,7 @@ struct fmt_main fmt_bestcrypt = {
 		SALT_ALIGN,
 		MIN_KEYS_PER_CRYPT,
 		MAX_KEYS_PER_CRYPT,
-		FMT_CASE | FMT_8_BIT | FMT_UNICODE | FMT_ENC | FMT_OMP | FMT_HUGE_INPUT,
+		FMT_CASE | FMT_8_BIT | FMT_OMP,
 		{
 /* FIXME: Should also report hash_id as a tunable cost */
 			"iteration count",

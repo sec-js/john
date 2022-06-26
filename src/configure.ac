@@ -54,9 +54,8 @@ AC_ARG_VAR([LD], [full pathname of linker to use])
 
 dnl Define Packages.
 dnl Use OpenSSL (default: yes).
-AC_ARG_WITH(openssl, [AS_HELP_STRING([--without-openssl],[Do not use Openssl (CommonCrypto must be enabled)])],,[with_openssl=yes])
-dnl Use CommonCrypto (default: no)
-AC_ARG_WITH(commoncrypto, [AS_HELP_STRING([--with-commoncrypto],[Use CommonCrypto])],,[with_commoncrypto=no])
+AC_ARG_WITH(openssl, [AS_HELP_STRING([--without-openssl],[Do not use OpenSSL (exclude much functionality)])],,[with_openssl=yes])
+AC_ARG_WITH(unrar, [AS_HELP_STRING([--without-unrar],[Omit non-free unrar code (rendering RAR v3 support incomplete)])],,[with_unrar=yes])
 dnl Cludge for endian (if not auto detected)
 AC_ARG_WITH(endian, [AS_HELP_STRING([--with-endian=little|big],[Set endianness for target if it doesn't detect properly])],,[endian=unknown])
 dnl -DJOHN_SYSTEMWIDE
@@ -75,7 +74,7 @@ dnl We define "--disable-FEATURE" when default is "auto".
 dnl MPI is not "auto" because its network usage might scare people:
 AC_ARG_ENABLE([openmp-for-fast-formats], [AC_HELP_STRING([--enable-openmp-for-fast-formats], [Enable OpenMP for fast formats (usually a bad idea - use fork instead)])], [ompfast=$enableval], [ompfast=no])
 AC_ARG_ENABLE([mpi], [AC_HELP_STRING([--enable-mpi], [Use OpenMPI])], [enable_mpi=$enableval], [enable_mpi=no])
-AC_ARG_ENABLE([rexgen], [AC_HELP_STRING([--enable-rexgen], [Enable use of rexgen library (experimental)])], [enable_rexgen=$enableval], [enable_rexgen=no])
+AC_ARG_ENABLE([rexgen], [AC_HELP_STRING([--enable-rexgen], [Enable use of rexgen library (unreliable!)])], [enable_rexgen=$enableval], [enable_rexgen=no])
 AC_ARG_ENABLE([pcap], [AC_HELP_STRING([--disable-pcap], [Do not build helpers depending on PCAP])], [enable_pcap=$enableval], [enable_pcap=auto])
 AC_ARG_ENABLE([native-tests], [AC_HELP_STRING([--disable-native-tests], [Do not test build system for target features.])], [enable_native_tests=$enableval], [enable_native_tests=auto])
 AC_ARG_ENABLE([native-march], [AC_HELP_STRING([--enable-native-march], [Use things like -march=native if valid compiler option(s).])], [enable_native_march=$enableval], [enable_native_march=no])
@@ -340,15 +339,19 @@ AC_CACHE_SAVE
 AC_PATH_PROG([SORT], [sort])
 AC_PATH_PROG([FIND], [find])
 AC_PATH_PROG([PERL], [perl])
+if test "x$PERL" = x ; then
+  AC_MSG_FAILURE([No perl executable found])
+fi
 AS_IF([test -z "$AS"], [AS="$CC"])
 AS_IF([test -z "$LD"], [LD="$CC"])
 AS_IF([test -z "$AR"], [AC_CHECK_TOOL([AR], [ar])])
 AS_IF([test -z "$STRIP"], [AC_CHECK_TOOL([STRIP], [strip])])
+AS_IF([test -z "$STRINGS"], [AC_CHECK_TOOL([STRINGS], [strings])])
 
 dnl Check if we have this at all
 PKG_PROG_PKG_CONFIG
 AC_MSG_CHECKING([if pkg-config will be used])
-if test "x$PKG_CONFIG" = x || test "x$enable_pkg_config" == xno ; then
+if test "x$PKG_CONFIG" = x || test "x$enable_pkg_config" = xno ; then
   JTR_MSG_RESULT_FAILIF_FORCED([xno], [x$enable_pkg_config], [pkg-config is NOT available])
   PKG_CONFIG=no
 else
@@ -367,7 +370,7 @@ dnl to succeeed.
 dnl
 if ( test -e ../run/john.pot ) ; then
 AC_MSG_CHECKING([if potcheck.pl succeeds])
-if test "x$PERL" == x ; then
+if test "x$PERL" = x ; then
    AC_MSG_RESULT([no Perl (unable to check)])
 else
    $PERL ../run/potcheck.pl -validate < ../run/john.pot
@@ -581,22 +584,12 @@ dnl is specified, the -llibname will NOT get appended to LIBS. So it has to be
 dnl done by 'hand'.
 dnl ======================================================================
 
-AS_IF([test "x$with_commoncrypto" != xyes && test "x$with_openssl" = xno],
-   [AC_MSG_FAILURE([At least one of OpenSSL and CommonCrypto must be used],1)]
-)
-
-AS_IF([test "x$with_commoncrypto" = xyes],
-  [AC_CHECK_HEADER([CommonCrypto/CommonDigest.h],
-    [AC_CHECK_LIB([System], [CCKeyDerivationPBKDF],
-      [AC_CHECK_LIB([System], [CCCryptorCreate], [JTR_LIST_ADD(CFLAGS,"-DCOMMON_DIGEST_FOR_OPENSSL")] [AC_SUBST(COMMONCRYPTO_LIBS, [-lSystem])] [AC_DEFINE(HAVE_COMMONCRYPTO,1,[Define to 1 if you have the CommonCrypto library.])], [AC_MSG_FAILURE([No CommonCrypto found],1)] )] )] )] )
-
 AS_IF([test "x$with_openssl" != xno],
    [if test "x$enable_native_tests" != xno -a "x$PKG_CONFIG" != xno; then
    PKG_CHECK_MODULES([OPENSSL], [openssl],
       AC_DEFINE(HAVE_LIBCRYPTO,1,[Define to 1 if you have the `crypto' library (-lcrypto).])
          AC_DEFINE(HAVE_LIBSSL,1,[Define to 1 if you have the `ssl' library (-lssl).]),
-         AC_MSG_FAILURE([JtR requires OpenSSL and OpenSSL-devel being installed. Install if not installed.
-Try using --disable-pkg-config and possibly helping configure find oSSL by providing hints in CFLAGS and LDFLAGS],1))
+         AC_MSG_FAILURE([OpenSSL and/or its development libraries not found. Try using --disable-pkg-config and possibly helping configure find them by providing hints in CPPFLAGS and LDFLAGS (or use --without-openssl option)],1))
 else
    AS_IF([test "x${OPENSSL_CFLAGS}${OPENSSL_LIBS}" != "x" -o "x$cross_compiling" = "xyes" -o "x$enable_native_tests" = xno -o "x$PKG_CONFIG" = xno],
       [AC_MSG_CHECKING([supplied paths for OpenSSL])]
@@ -616,15 +609,35 @@ else
          [AC_DEFINE(HAVE_LIBSSL,1,[Define to 1 if you have the `ssl' library (-lssl).])]
          [AC_DEFINE(HAVE_LIBCRYPTO,1,[Define to 1 if you have the `crypto' library (-lcrypto).])]
          [OPENSSL_LIBS="${OPENSSL_LIBS} -lssl -lcrypto"],
-         [AC_MSG_FAILURE(JtR requires libssl/libcrypto being installed,1)])],
-         [AC_MSG_FAILURE(JtR requires libssl being installed,1)]
+         [AC_MSG_FAILURE([libssl/libcrypto not found, install them or use --without-openssl option],1)])],
+         [AC_MSG_FAILURE([libssl not found, install it or use --without-openssl option],1)]
       )
     LIBS="$LIBS_ORIG"],
-    [AC_MSG_FAILURE(JtR requires OpenSSL headers being installed,1)]
+    [AC_MSG_FAILURE([OpenSSL headers not found, install them or use --without-openssl option],1)]
    )]
   )
   fi]
 )
+
+AC_MSG_CHECKING([for (non-free) ClamAV unrar code])
+if test $with_unrar = yes; then
+  for sf in unrar.c unrarcmd.c unrarfilter.c unrarhlp.c unrarppm.c unrarvm.c unrar.h unrarcmd.h unrarfilter.h unrarhlp.h unrarppm.h unrarvm.h; do
+    if test ! -s $sf; then
+      unrar_files="no (files missing)"
+      AC_MSG_RESULT([no])
+      break
+    fi
+  done
+  if test -z "$unrar_files"; then
+    unrar_files="yes"
+    AC_MSG_RESULT([yes])
+    AC_DEFINE(HAVE_UNRAR, 1, [Define to 1 if you have the ClamAV unrar files.])
+    AC_SUBST([UNRAR_OBJS], "unrarcmd.o unrarfilter.o unrarhlp.o unrar.o unrarppm.o unrarvm.o")
+  fi
+else
+  unrar_files="no (disabled)"
+  AC_MSG_RESULT([disabled])
+fi
 
 AC_CHECK_LIB([m],[sqrt],[AC_DEFINE(HAVE_LIBM,1,[Define to 1 if you have the `m' library (-lm).])] [AC_SUBST(M_LIBS, [-lm])],[AC_MSG_FAILURE(JtR requires libm being installed,1)])
 AC_CHECK_LIB([rt],[clock_gettime],[AC_DEFINE(HAVE_LIBRT,1,[Define to 1 if you have clock_gettime in the `rt' library (-lrt).])] [AC_SUBST(RT_LIBS, [-lrt])])
@@ -659,15 +672,15 @@ dnl Check for rexgen only if rexgen wanted
 if test "x$enable_rexgen" != xno ; then
   AC_CHECK_HEADER([librexgen/version.h],
     [AC_SEARCH_LIBS([rexgen_version_int],[rexgen librexgen],
-      [AC_MSG_CHECKING([librexgen minimum version])] && [AC_TRY_RUN([int main() { return ! (rexgen_version_int() >= 0x020006); }],
+      [AC_MSG_CHECKING([librexgen minimum version])] && [AC_TRY_RUN([unsigned int rexgen_version_int();int main() { return ! (rexgen_version_int() >= 0x020105); }],
         AC_MSG_RESULT([usable]) && [using_rexgen=yes],
         AC_MSG_RESULT([TOO old. Rexgen not usable!]))]
     )]
   )
-  if test "x$using_rexgen" == "xyes" ; then
+  if test "x$using_rexgen" = "xyes" ; then
     AC_DEFINE(HAVE_LIBREXGEN,1,[Define to 1 if you have the `rexgen' library (-lrexgen).])
   else
-    if test "x$enable_rexgen" == "xyes" ; then
+    if test "x$enable_rexgen" = "xyes" ; then
       AC_MSG_FAILURE([rexgen not installed, or unusable version])
     fi
   fi
@@ -708,9 +721,8 @@ ACX_HEADER_STRING
 dnl Check missing stuff in OpenSSL (too old, or disabled features)
 LIBS_ORIG="$LIBS"
 CFLAGS_ORIG="$CFLAGS"
-LIBS="$OPENSSL_LIBS $COMMONCRYPTO_LIBS $LIBS"
+LIBS="$OPENSSL_LIBS $LIBS"
 CFLAGS="$OPENSSL_CFLAGS $CFLAGS"
-AS_IF([test "$with_commoncrypto" = yes], [AC_DEFINE([HAVE_SHA256],1,[Define to 1 if you have the `SHA256' function.])])
 AC_CHECK_FUNCS([SHA256 WHIRLPOOL RIPEMD160 AES_encrypt DSA_get0_pqg])
 LIBS="$LIBS_ORIG"
 CFLAGS="$CFLAGS_ORIG"
@@ -960,7 +972,7 @@ fi
 
 if test "x$aesni_options" != xDISABLED -a "x$ac_path_YASM_found" != xfalse; then
    using_aesni="run-time detection"
-elif test "$cpu_family" = intel; then
+elif test "$with_openssl" = "yes" -a "$cpu_family" = intel; then
    using_aesni="depends on OpenSSL"
 else
    using_aesni=no
@@ -1078,7 +1090,6 @@ if test x$using_cl = xyes ; then
 else
   AC_MSG_NOTICE([creating *_plug.c rules])
 fi
-
 if test "`echo *_plug.c`" != "*_plug.c"; then
    AC_SUBST([PLUGFORMATS_OBJS],[`echo *_plug.c | sed 's/opencl[[A-Za-z0-9_\-]]*\.c //g;s/\.c/.o/g'`])
    AC_SUBST([OPENCL_PLUGFORMATS_OBJS],[`echo opencl*_plug.c | sed 's/\.c/.o/g'`])
@@ -1097,7 +1108,8 @@ AC_CONFIG_FILES([Makefile
                  aes/aesni/Makefile
                  aes/openssl/Makefile
                  secp256k1/Makefile
-                 ed25519-donna/Makefile])
+                 ed25519-donna/Makefile
+		 poly1305-donna/Makefile])
 
 dnl Escaping the '#' in things like "-Wno-error=#warnings" is required in
 dnl Makefile but forbidden when *not* in Makefile so we need to back-up
@@ -1255,39 +1267,39 @@ dnl ======================================================================
 
 Configured for building John the Ripper ${PACKAGE_VERSION}:
 
-Target CPU ................................. ${CPU_NAME}, ${CPU_BIT_STR}-bit ${using_endian}${using_x32}
-AES-NI support ............................. ${using_aesni}
-Target OS .................................. ${host_os}
-Cross compiling ............................ ${cross_compiling}
-Legacy arch header ......................... ${ARCH_LINK}
+Target CPU ......................................... ${CPU_NAME}, ${CPU_BIT_STR}-bit ${using_endian}${using_x32}
+AES-NI support ..................................... ${using_aesni}
+Target OS .......................................... ${host_os}
+Cross compiling .................................... ${cross_compiling}
+Legacy arch header ................................. ${ARCH_LINK}
 
 Optional libraries/features found:
-Memory map (share/page large files) ........ ${using_mmap}
-Fork support ............................... ${ac_cv_func_fork_works}
-OpenMP support ............................. ${using_omp}
-OpenCL support ............................. ${using_cl}
-Generic crypt(3) format .................... ${using_crypt}
-libgmp (PRINCE mode and faster SRP formats)  ${ac_cv_lib_gmp___gmpz_init}
-128-bit integer (faster PRINCE mode) ....... ${have_int128}
-libz (pkzip and some other formats) ........ ${using_zlib}
-libbz2 (gpg2john extra decompression logic)  ${using_bz2}
-libpcap (vncpcap2john and SIPdump) ......... ${using_pcap}
-OpenMPI support (default disabled) ......... ${using_mpi}
-ZTEX USB-FPGA module 1.15y support ......... ${ztex}
+Memory map (share/page large files) ................ ${using_mmap}
+Fork support ....................................... ${ac_cv_func_fork_works}
+OpenMP support ..................................... ${using_omp}
+OpenCL support ..................................... ${using_cl}
+Generic crypt(3) format ............................ ${using_crypt}
+OpenSSL (many additional formats) .................. ${with_openssl}
+libgmp (PRINCE mode and faster SRP formats) ........ ${ac_cv_lib_gmp___gmpz_init}
+128-bit integer (faster PRINCE mode) ............... ${have_int128}
+libz (7z, pkzip and some other formats) ............ ${using_zlib}
+libbz2 (7z and gpg2john bz2 support) ............... ${using_bz2}
+libpcap (vncpcap2john and SIPdump) ................. ${using_pcap}
+Non-free unrar code (complete RAR support) ......... ${unrar_files}
+librexgen (regex mode, see doc/README.librexgen) ... ${using_rexgen}
+OpenMPI support (default disabled) ................. ${using_mpi}
+Experimental code (default disabled) ............... ${experimental}
+ZTEX USB-FPGA module 1.15y support ................. ${ztex}
 
 EOF
-
 dnl === this section is NOT output, unless there is some debugging flag enabled.
 if test "$ubsan" != "disabled" || test "$asan" != "disabled" ||
-   test "$fuzz" != "no" || test "$experimental" != "no" ||
-   test "$using_rexgen" != "no" ; then
+   test "$fuzz" != "no" ; then
 cat <<EOF
 Development options (these may hurt performance when enabled):
-AddressSanitizer ("ASan") .................. ${asan}
-UndefinedBehaviorSanitizer ("UbSan") ....... ${ubsan}
-Fuzzing test ............................... ${fuzz}
-Experimental code .......................... ${experimental}
- - librexgen (regex mode) .................. ${using_rexgen}
+AddressSanitizer ("ASan") .......................... ${asan}
+UndefinedBehaviorSanitizer ("UbSan") ............... ${ubsan}
+Fuzzing test ....................................... ${fuzz}
 
 EOF
 fi

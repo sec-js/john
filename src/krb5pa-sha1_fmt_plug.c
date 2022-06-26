@@ -32,6 +32,12 @@
  * released under same terms as above.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_krb5pa;
 #elif FMT_REGISTERS_H
@@ -213,7 +219,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 
 static void *get_salt(char *ciphertext)
 {
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	char *p;
 	int i;
@@ -481,3 +487,4 @@ struct fmt_main fmt_krb5pa = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

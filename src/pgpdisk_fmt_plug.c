@@ -8,6 +8,12 @@
  * are permitted.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_pgpdisk;
 #elif FMT_REGISTERS_H
@@ -223,7 +229,7 @@ struct fmt_main fmt_pgpdisk = {
 		FMT_CASE | FMT_8_BIT | FMT_OMP,
 		{
 			"iteration count",
-			"algorithm [3=CAST, 4=TwoFish, 5/6/7=AES]",
+			"algorithm [3=CAST 4=TwoFish 5/6/7=AES]",
 		},
 		{ FORMAT_TAG },
 		pgpdisk_tests
@@ -261,3 +267,4 @@ struct fmt_main fmt_pgpdisk = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

@@ -11,7 +11,11 @@
  * Converted to use 'common' code, Feb29-Mar1 2016, JimF.
  */
 
-#ifdef HAVE_OPENCL
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_OPENCL && HAVE_LIBCRYPTO
 
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_opencl_gpg;
@@ -92,6 +96,7 @@ struct fmt_tests gpg_tests[] = {  // from GPU
 
 static int *cracked;
 static int any_cracked;
+static int new_keys;
 
 static cl_int cl_error;
 static gpg_password *inbuffer;
@@ -265,6 +270,8 @@ static void set_key(char *key, int index)
 		length = PLAINTEXT_LENGTH;
 	inbuffer[index].length = length;
 	memcpy(inbuffer[index].v, key, length);
+
+	new_keys = 1;
 }
 
 static char *get_key(int index)
@@ -291,9 +298,13 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 	}
 
 	// Copy data to gpu
-	BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0,
-		insize, inbuffer, 0, NULL, multi_profilingEvent[0]),
-		"Copy data to gpu");
+	if (new_keys) {
+		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], mem_in, CL_FALSE, 0,
+			insize, inbuffer, 0, NULL, multi_profilingEvent[0]),
+			"Copy data to gpu");
+
+		new_keys = 0;
+	}
 
 	// Run kernel
 	if (gpg_common_cur_salt->hash_algorithm == HASH_SHA1) {
@@ -412,4 +423,4 @@ struct fmt_main fmt_opencl_gpg = {
 
 #endif /* plugin stanza */
 
-#endif /* HAVE_OPENCL */
+#endif /* HAVE_OPENCL && HAVE_LIBCRYPTO */

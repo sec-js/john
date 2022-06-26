@@ -5,6 +5,12 @@
  * and the GPU formats, and places it into one common location.
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #include <openssl/des.h>
 
 #include "arch.h"
@@ -33,18 +39,33 @@ struct fmt_tests pem_tests[] = {
 
 int pem_valid(char *ciphertext, struct fmt_main *self)
 {
+	static int warned = 0;
 	char *ctcopy, *keeptr, *p;
 	int len, value, extra;
 
 	if (strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH) != 0)
 		return 0;
 
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 
 	ctcopy += TAG_LENGTH;
 	if ((p = strtokm(ctcopy, "$")) == NULL) // type
 		goto err;
+	if (strcmp(p, "1") != 0 && !warned) {
+		if ((p = strtokm(NULL, "$")) == NULL)
+			goto err;
+		if (strcmp(p, "pbkdf2") != 0) {
+			fprintf(stderr, "Warning: %s kdf algorithm <%s> is not supported currently!\n", self->params.label, p);
+			warned = 1;
+			goto err;
+		}
+		if ((p = strtokm(NULL, "$")) == NULL)
+			goto err;
+		fprintf(stderr, "Warning: %s prf algorithm <%s> is not supported currently!\n", self->params.label, p);
+		warned = 1;
+		goto err;
+	}
 	if (!isdec(p))
 		goto err;
 	value = atoi(p);
@@ -59,7 +80,7 @@ int pem_valid(char *ciphertext, struct fmt_main *self)
 		goto err;
 	if ((p = strtokm(NULL, "$")) == NULL)   // salt
 		goto err;
-	if (hexlenl(p, &extra) != 16 || extra)
+	if (hexlenl(p, &extra) != SALTLEN * 2 || extra)
 		goto err;
 	if ((p = strtokm(NULL, "$")) == NULL)   // iterations
 		goto err;
@@ -75,6 +96,8 @@ int pem_valid(char *ciphertext, struct fmt_main *self)
 	if (!isdec(p))
 		goto err;
 	len = atoi(p);
+	if (len > CTLEN)
+		goto err;
 	if ((p = strtokm(NULL, "*")) == NULL)   // ciphertext
 		goto err;
 	if (hexlenl(p, &extra) != len*2 || extra)
@@ -90,7 +113,7 @@ err:
 
 void *pem_get_salt(char *ciphertext)
 {
-	char *ctcopy = strdup(ciphertext);
+	char *ctcopy = xstrdup(ciphertext);
 	char *keeptr = ctcopy;
 	int i;
 	char *p;
@@ -174,9 +197,9 @@ int pem_decrypt(unsigned char *key, unsigned char *iv, unsigned char *data, stru
 		memcpy(key1, key, 8);
 		memcpy(key2, key + 8, 8);
 		memcpy(key3, key + 16, 8);
-		DES_set_key((DES_cblock *) key1, &ks1);
-		DES_set_key((DES_cblock *) key2, &ks2);
-		DES_set_key((DES_cblock *) key3, &ks3);
+		DES_set_key_unchecked((DES_cblock *) key1, &ks1);
+		DES_set_key_unchecked((DES_cblock *) key2, &ks2);
+		DES_set_key_unchecked((DES_cblock *) key3, &ks3);
 		memcpy(ivec, iv, 8);
 		DES_ede3_cbc_encrypt(data, out, cur_salt->ciphertext_length, &ks1, &ks2, &ks3, &ivec, DES_DECRYPT);
 	} else if (cur_salt->cid == 2) {  // AES-128
@@ -257,3 +280,5 @@ unsigned int pem_cipher(void *salt)
 
 	return cs->cid;
 }
+
+#endif /* HAVE_LIBCRYPTO */

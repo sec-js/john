@@ -10,6 +10,12 @@
  *
  */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if HAVE_LIBCRYPTO
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_rvary;
 #elif FMT_REGISTERS_H
@@ -161,7 +167,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 
 	if (strncmp(ciphertext, FORMAT_TAG, FORMAT_TAG_LEN))
 		return 0;
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += FORMAT_TAG_LEN;
 	if (hexlenu(ctcopy, &extra) != CIPHERTEXT_LENGTH || extra)
@@ -320,3 +326,4 @@ struct fmt_main fmt_rvary = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBCRYPTO */

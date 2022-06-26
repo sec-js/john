@@ -30,6 +30,7 @@ john_register_one(&fmt_rsvp);
 #include "arch.h"
 #include "md5.h"
 #include "sha.h"
+#include "sha2.h"
 #include "misc.h"
 #include "common.h"
 #include "formats.h"
@@ -195,7 +196,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	if (strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH))
 		return 0;
 
-	strkeep = strdup(ciphertext);
+	strkeep = xstrdup(ciphertext);
 	p = &strkeep[TAG_LENGTH];
 
 	if ((p = strtokm(p, "$")) == NULL) /* version */

@@ -49,7 +49,7 @@ john_register_one(&fmt_KeePass);
 
 #define FORMAT_LABEL            "KeePass"
 #define FORMAT_NAME             ""
-#define ALGORITHM_NAME          "SHA256 AES 32/" ARCH_BITS_STR SHA2_LIB
+#define ALGORITHM_NAME          "SHA256 AES 32/" ARCH_BITS_STR
 
 static keepass_salt_t *cur_salt;
 static int any_cracked, *cracked;
@@ -292,7 +292,7 @@ struct fmt_main fmt_KeePass = {
 		{
 			"iteration count",
 			"version",
-			"algorithm [0=AES, 1=TwoFish, 2=ChaCha]",
+			"algorithm [0=AES 1=TwoFish 2=ChaCha]",
 		},
 		{ FORMAT_TAG },
 		keepass_tests

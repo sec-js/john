@@ -49,16 +49,21 @@
  * n = 125617018995153554710546479714086468244499594888726646874671447258204721048803
  * g = 2 */
 
+#if AC_BUILT
+#include "autoconfig.h"
+#endif
+
+#if !AC_BUILT && !__MIC__
+#define HAVE_LIBGMP 1 /* legacy build uses libgmp by default, except for MIC */
+#endif
+
+#if HAVE_LIBGMP || HAVE_LIBCRYPTO /* we need one of these for bignum */
+
 #if FMT_EXTERNS_H
 extern struct fmt_main fmt_clipperz;
 #elif FMT_REGISTERS_H
 john_register_one(&fmt_clipperz);
 #else
-
-#if AC_BUILT
-/* need to know if HAVE_LIBGMP is set, for autoconfig build */
-#include "autoconfig.h"
-#endif
 
 #include <string.h>
 #ifdef HAVE_LIBGMP
@@ -208,7 +213,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 	char *p = NULL;
 	if (strncmp(ciphertext, CLIPPERZSIG, CLIPPERZSIGLEN))
 		return 0;
-	ctcopy = strdup(ciphertext);
+	ctcopy = xstrdup(ciphertext);
 	keeptr = ctcopy;
 	ctcopy += CLIPPERZSIGLEN;
 	if ((p = strtokm(ctcopy, "$")) == NULL)
@@ -509,3 +514,4 @@ struct fmt_main fmt_clipperz = {
 };
 
 #endif /* plugin stanza */
+#endif /* HAVE_LIBGMP || HAVE_LIBCRYPTO */

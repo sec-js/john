@@ -9,6 +9,8 @@
 #
 # pylint: disable=invalid-name,line-too-long,missing-docstring,pointless-string-statement
 
+# This script converts encrypted private key files in PKCS8 format to John input
+
 import sys
 from binascii import hexlify
 
@@ -17,10 +19,7 @@ try:
     from asn1crypto.keys import EncryptedPrivateKeyInfo
 except ImportError:
     sys.stderr.write("asn1crypto python package is missing, please install it using 'pip install --user asn1crypto' command.\n")
-    # traceback.print_exc()
-    sys.exit(-1)
-
-PY3 = sys.version_info[0] == 3
+    sys.exit(1)
 
 """
 
@@ -67,7 +66,7 @@ def unwrap_pkcs8_data(blob):
         if data["encryption_algorithm"]["algorithm"] != "pbes2":
             sys.stderr.write("[%s] encryption_algorithm <%s> is not supported currently!\n" %
                              (sys.argv[0], data["encryption_algorithm"]["algorithm"]))
-            return False
+            return True
 
         # encryption data
         encrypted_data = data["encrypted_data"]
@@ -78,7 +77,7 @@ def unwrap_pkcs8_data(blob):
         if kdf["algorithm"] != "pbkdf2":
             sys.stderr.write("[%s] kdf algorithm <%s> is not supported currently!\n" %
                              (sys.argv[0], kdf["algorithm"]))
-            return False
+            return True
         kdf_params = kdf["parameters"]
         salt = kdf_params["salt"]
         iterations = kdf_params["iteration_count"]
@@ -98,18 +97,16 @@ def unwrap_pkcs8_data(blob):
             cid = 4
         else:
             sys.stderr.write("[%s] cipher <%s> is not supported currently!\n" % (sys.argv[0], cipher))
-            return False
+            return True
 
-        salth = hexlify(salt)
-        encrypted_datah = hexlify(encrypted_data)
-        ivh = hexlify(iv)
+        salth = hexlify(salt).decode("ascii")
+        encrypted_datah = hexlify(encrypted_data).decode("ascii")
+        ivh = hexlify(iv).decode("ascii")
 
-        if PY3:
-            salth = salth.decode("ascii")
-            encrypted_datah = encrypted_datah.decode("ascii")
-            ivh = ivh.decode("ascii")
-
-        sys.stdout.write("$PEM$1$%d$%s$%s$%s$%d$%s\n" % (cid, salth, iterations, ivh, len(encrypted_data), encrypted_datah))
+        pem_version = "$PEM$1"
+        if kdf_params["prf"]["algorithm"] != "sha1":
+            pem_version = f'$PEM$2${kdf["algorithm"]}${kdf_params["prf"]["algorithm"]}${cipher}'
+        sys.stdout.write(pem_version+"$%d$%s$%s$%s$%d$%s\n" % (cid, salth, iterations, ivh, len(encrypted_data), encrypted_datah))
         return True
     except ValueError:
         return False
@@ -123,16 +120,16 @@ if __name__ == "__main__":
 
     for filename in sys.argv[1:]:
         blob = open(filename, "rb").read()
-        if b'-----BEGIN ENCRYPTED PRIVATE KEY-----' not in blob:
-            if b'PRIVATE KEY-----' in blob:
-                sys.stderr.write("[%s] try using ssh2john.py on this file instead!\n" % sys.argv[0])
-            else:
-                # try as DER payload
-                ret = unwrap_pkcs8_data(blob)
-                if not ret:
-                    sys.stderr.write("[%s] is this really a private key in PKCS #8 format?\n" % sys.argv[0])
-
-        else:
+        if b'-----BEGIN ENCRYPTED PRIVATE KEY-----' in blob:
             ret = unwrap_pkcs8(blob)
             if not ret:
-                sys.stderr.write("[%s] is this really a private key in PKCS #8 format?\n" % sys.argv[0])
+                sys.stderr.write("[%s] is this really a private key in PKCS #8 format?\n" % filename)
+        elif b'-----BEGIN PRIVATE KEY-----' in blob:
+            sys.stderr.write("[%s] is not encrypted!\n" % filename)
+        elif b'PRIVATE KEY-----' in blob:
+            sys.stderr.write("[%s] try using ssh2john.py on this file instead!\n" % filename)
+        else:
+            # try as DER instead of PEM
+            ret = unwrap_pkcs8_data(blob)
+            if not ret:
+                sys.stderr.write("[%s] is this really a private key in PKCS #8 format?\n" % filename)

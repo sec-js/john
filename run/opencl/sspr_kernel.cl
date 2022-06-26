@@ -29,18 +29,6 @@
 #define BINARY_SIZE_MIN         16
 #endif
 
-#ifndef SHA_DIGEST_LENGTH
-#define SHA_DIGEST_LENGTH 20
-#endif
-
-#ifndef SHA256_DIGEST_LENGTH
-#define SHA256_DIGEST_LENGTH 32
-#endif
-
-#ifndef SHA512_DIGEST_LENGTH
-#define SHA512_DIGEST_LENGTH 64
-#endif
-
 typedef union out_u {
 	uchar b[BINARY_SIZE_MIN];
 	uint w[BINARY_SIZE_MIN / sizeof(uint)];
@@ -295,7 +283,7 @@ __kernel void loop_sha512(__global sspr_hash *outbuffer,
 
 		for (j = 0; j < 8; j++)
 			W[j] = buf.W[j];
-		W[8] = 0x8000000000000000;
+		W[8] = 0x8000000000000000UL;
 		W[15] = 64 << 3;
 		sha512_single_zeros(W, buf.W);
 	}

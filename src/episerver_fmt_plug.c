@@ -50,6 +50,7 @@ john_register_one(&fmt_episerver);
 #include "sha.h"
 #include "sha2.h"
 #include "misc.h"
+#include "memory.h"
 #include "common.h"
 #include "formats.h"
 #include "params.h"
@@ -97,7 +98,7 @@ john_register_one(&fmt_episerver);
 #define MAX_KEYS_PER_CRYPT      (NBKEYS * 2)
 #endif
 #else
-#define ALGORITHM_NAME          "SHA1/SHA256 32/" ARCH_BITS_STR SHA2_LIB
+#define ALGORITHM_NAME          "SHA1/SHA256 32/" ARCH_BITS_STR
 #define PLAINTEXT_LENGTH        32
 #define MIN_KEYS_PER_CRYPT      1
 #define MAX_KEYS_PER_CRYPT      1024
@@ -186,7 +187,7 @@ static int valid(char *ciphertext, struct fmt_main *self)
 
 	if (strncmp(ciphertext, FORMAT_TAG, FORMAT_TAG_LEN))
 		return 0;
-	if (!(ctcopy = strdup(ciphertext)))
+	if (!(ctcopy = xstrdup(ciphertext)))
 		return 0;
 	keeptr = ctcopy;
 	ctcopy += FORMAT_TAG_LEN;	/* skip leading '$episerver$*' */
